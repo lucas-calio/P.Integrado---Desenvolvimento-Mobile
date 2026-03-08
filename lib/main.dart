@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
-import 'dart:io'; // Importante para o HttpOverrides
+import 'dart:io';
 import 'features/auth/login_page.dart';
 
-// =======================================================
-// ISSO FAZ O APP IGNORAR CERTIFICADOS SSL INVÁLIDOS (Igual o Postman)
-// =======================================================
 class MyHttpOverrides extends HttpOverrides {
   @override
   HttpClient createHttpClient(SecurityContext? context) {
@@ -14,25 +11,48 @@ class MyHttpOverrides extends HttpOverrides {
 }
 
 void main() {
-  // Ativa a liberação do SSL antes de o app iniciar
   HttpOverrides.global = MyHttpOverrides();
-  
-  runApp(const MyApp());
+  runApp(const StoxApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class StoxApp extends StatelessWidget {
+  const StoxApp({super.key});
 
   @override
   Widget build(BuildContext context) {
+    const primaryColor = Color(0xFF0A6ED1);
+
     return MaterialApp(
-      title: 'Contagem de Estoque',
+      title: 'STOX - Inventário',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0A6ED1)),
+        colorScheme: ColorScheme.fromSeed(seedColor: primaryColor),
+        primaryColor: primaryColor,
         useMaterial3: true,
+        scaffoldBackgroundColor: Colors.white,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: primaryColor,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          centerTitle: true,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: primaryColor,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            elevation: 0,
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          focusedBorder: OutlineInputBorder(
+            borderSide: const BorderSide(color: primaryColor, width: 2),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          labelStyle: const TextStyle(color: Colors.grey),
+        ),
       ),
-      // Inicia direto na tela de Login
       home: const LoginPage(), 
     );
   }
