@@ -1,6 +1,6 @@
 name: stox
-description: "A new Flutter project."
-version: 1.0.0+1
+description: "Sistema de Gestão de Inventário STOX - Agrobusiness"
+version: 1.0.0+2
 
 environment:
   sdk: ^3.11.0
@@ -14,7 +14,6 @@ dependencies:
   sqflite: ^2.3.0 
   path: ^1.9.0 
   connectivity_plus: ^6.1.5
-  # Substituído para evitar erros de Gradle/Namespace
   mobile_scanner: ^5.0.0 
   audioplayers: ^6.6.0
   vibration: ^3.1.8
@@ -23,11 +22,31 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0 
+  # Plugins para automação de ícones e splash
+  flutter_launcher_icons: "^0.13.1"
+  flutter_native_splash: "^2.4.0"
+
+# Configuração do Ícone que vai para a Loja/Android (Usa o logo.png)
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: false
+  image_path: "assets/images/logo.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/images/logo.png"
+
+# Configuração da Tela de Abertura (Splash)
+flutter_native_splash:
+  color: "#FFFFFF"
+  image: assets/images/logo.png
+  android_12:
+    image: assets/images/logo.png
+    color: "#FFFFFF"
 
 flutter:
   uses-material-design: true
   assets:
-    - assets/images/Logo_colorida.png
+    - assets/images/logo.png           # Ícone de sistema
+    - assets/images/Logo_colorida.png  # Logo das telas principais
     - assets/images/sap-logo.png
     - assets/sounds/error_beep.mp3
     - assets/sounds/beep.mp3
