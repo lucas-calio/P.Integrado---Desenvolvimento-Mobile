@@ -5,6 +5,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:vibration/vibration.dart';
 import 'package:stox/db/database_helper.dart';
 import 'package:stox/services/export_service.dart';
+import 'package:stox/services/ocr_service.dart'; // Importação do serviço de IA que criamos
 
 class ContadorOfflinePage extends StatefulWidget {
   const ContadorOfflinePage({super.key});
@@ -72,6 +73,33 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
       _mostrarMensagem('Relatório exportado com sucesso!', isSuccess: true);
     } catch (e) {
       _mostrarMensagem('Erro ao exportar: $e', isError: true);
+    }
+  }
+
+  // --- FUNÇÃO NOVA DA IA ---
+  Future<void> _escanearComIA() async {
+    HapticFeedback.lightImpact();
+    FocusScope.of(context).unfocus();
+
+    _mostrarMensagem('Abrindo câmera para leitura inteligente...', isSuccess: true);
+    
+    final resultado = await OcrService.lerAnotacaoDaCamera();
+    
+    if (resultado != null) {
+      setState(() {
+        if (resultado['itemCode']!.isNotEmpty) {
+          _codigoController.text = resultado['itemCode']!;
+        }
+        if (resultado['quantidade']!.isNotEmpty) {
+          _quantidadeController.text = resultado['quantidade']!;
+        }
+      });
+      await _tocarFeedback('sounds/beep.mp3');
+      _mostrarMensagem('Leitura via IA concluída!', isSuccess: true);
+      _focusNodeCodigo.nextFocus();
+    } else {
+      // Caso o usuário cancele a câmera ou dê erro, não fazemos nada drástico
+      HapticFeedback.selectionClick();
     }
   }
 
@@ -451,9 +479,21 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
                 decoration: InputDecoration(
                   labelText: 'Código do Item',
                   prefixIcon: const Icon(Icons.inventory_2_outlined),
-                  suffixIcon: IconButton(
-                    icon: Icon(Icons.qr_code_scanner_rounded, color: theme.primaryColor),
-                    onPressed: _abrirScanner,
+                  // --- AQUI ESTÁ A MUDANÇA DOS ÍCONES ---
+                  suffixIcon: Row(
+                    mainAxisSize: MainAxisSize.min, // Garante que a Row ocupe apenas o espaço necessário
+                    children: [
+                      IconButton(
+                        tooltip: 'Ler com IA (Foto/Texto)',
+                        icon: Icon(Icons.auto_awesome_rounded, color: theme.primaryColor),
+                        onPressed: _escanearComIA,
+                      ),
+                      IconButton(
+                        tooltip: 'Ler Código de Barras',
+                        icon: Icon(Icons.qr_code_scanner_rounded, color: theme.primaryColor),
+                        onPressed: _abrirScanner,
+                      ),
+                    ],
                   ),
                 ),
               ),
