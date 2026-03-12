@@ -1,3 +1,5 @@
+// android/build.gradle.kts
+
 allprojects {
     repositories {
         google()
@@ -24,7 +26,7 @@ tasks.register<Delete>("clean") {
 
 // --- CORREÇÃO DE NAMESPACE (VERSÃO SEGURA) ---
 subprojects {
-    // Em vez de afterEvaluate, aplicamos a lógica assim que o plugin Android é detectado
+    // Aplica a lógica assim que o plugin Android é detectado para evitar erros de compilação
     plugins.withType<com.android.build.gradle.api.AndroidBasePlugin> {
         val android = extensions.findByType<com.android.build.gradle.BaseExtension>()
         android?.apply {
