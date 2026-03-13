@@ -106,6 +106,6 @@ Em vez de métodos tradicionais, o Stox utiliza **Visão Computacional** atravé
 
 ---
 
-**Nota:** Este é um projeto acadêmico desenvolvido para o curso de Análise e Desenvolvimento de Sistemas da **UNIFEOB**.
+**Nota:** Este é um projeto acadêmico desenvolvido para o curso de Computação da Computação e Análise e Desenvolvimento de Sistemas da **UNIFEOB**.
 
 ---
