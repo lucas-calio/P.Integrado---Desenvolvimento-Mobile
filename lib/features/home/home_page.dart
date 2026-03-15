@@ -20,8 +20,8 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   List<Map<String, dynamic>> _contagensOffline = [];
   bool _carregando = false;
-  String _nomeOperador = "Operador...";
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  String _nomeOperador = 'Operador...';
+  final AudioPlayer _audio = AudioPlayer();
 
   @override
   void initState() {
@@ -31,9 +31,33 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
-    _audioPlayer.dispose();
+    _audio.dispose();
     super.dispose();
   }
+
+  // ─── FEEDBACK ──────────────────────────────────────────────────────────────
+
+  Future<void> _play(String asset, {bool isError = false, bool isFail = false}) async {
+    try {
+      if (await Vibration.hasVibrator()) {
+        if (isFail) {
+          Vibration.vibrate(pattern: [0, 400, 100, 400]);
+        } else if (isError) {
+          Vibration.vibrate(pattern: [0, 200, 100, 300]);
+        } else {
+          Vibration.vibrate(duration: 300);
+        }
+      } else {
+        if (isFail || isError) { HapticFeedback.vibrate(); }
+        else { HapticFeedback.heavyImpact(); }
+      }
+      await _audio.play(AssetSource(asset));
+    } catch (e) {
+      debugPrint('Feedback error: $e');
+    }
+  }
+
+  // ─── DADOS ─────────────────────────────────────────────────────────────────
 
   Future<void> _carregarDadosIniciais() async {
     await Future.wait([_carregarDadosLocais(), _carregarUsuario()]);
@@ -43,34 +67,17 @@ class _HomePageState extends State<HomePage> {
     final prefs = await SharedPreferences.getInstance();
     if (mounted) {
       setState(() {
-        _nomeOperador = prefs.getString('UserName') ?? "Operador STOX";
+        _nomeOperador = prefs.getString('UserName') ?? 'Operador STOX';
       });
     }
   }
 
   Future<void> _carregarDadosLocais() async {
     final dados = await DatabaseHelper.instance.buscarContagens();
-    if (mounted) {
-      setState(() => _contagensOffline = dados);
-    }
+    if (mounted) setState(() => _contagensOffline = dados);
   }
 
-  Future<void> _tocarFeedback(String assetPath, {bool isError = false}) async {
-    try {
-      if (await Vibration.hasVibrator()) {
-        if (isError) {
-          Vibration.vibrate(pattern: [0, 200, 100, 400]);
-        } else {
-          Vibration.vibrate(duration: 300);
-        }
-      } else {
-        isError ? HapticFeedback.vibrate() : HapticFeedback.heavyImpact();
-      }
-      await _audioPlayer.play(AssetSource(assetPath));
-    } catch (e) {
-      debugPrint("Erro ao reproduzir feedback: $e");
-    }
-  }
+  // ─── SINCRONIZAÇÃO ──────────────────────────────────────────────────────────
 
   Future<void> _sincronizarComSAP() async {
     if (_contagensOffline.isEmpty) return;
@@ -82,80 +89,68 @@ class _HomePageState extends State<HomePage> {
       final erro = await SapService.postInventoryCounting(_contagensOffline);
 
       if (erro == null) {
-        await _tocarFeedback('sounds/check.mp3');
+        // ✅ Sucesso
+        await _play('sounds/check.mp3');
         await DatabaseHelper.instance.limparContagens();
         await _carregarDadosLocais();
 
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Row(
-              children: [
-                Icon(Icons.check_circle_rounded, color: Colors.white),
-                SizedBox(width: 8),
-                Text(
-                  'Sincronização concluída com sucesso!',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            backgroundColor: Colors.green.shade700,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Row(children: [
+            Icon(Icons.check_circle_rounded, color: Colors.white),
+            SizedBox(width: 8),
+            Text('Sincronização concluída com sucesso!',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ]),
+          backgroundColor: Colors.green.shade700,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ));
       } else {
-        await _tocarFeedback('sounds/fail.mp3', isError: true);
+        // ❌ Erro SAP
+        await _play('sounds/fail.mp3', isFail: true);
         if (!mounted) return;
         _exibirErroSap(erro);
       }
     } catch (e) {
-      await _tocarFeedback('sounds/fail.mp3', isError: true);
+      // ❌ Sem conexão
+      await _play('sounds/fail.mp3', isFail: true);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Row(
-            children: [
-              Icon(Icons.wifi_off_rounded, color: Colors.white),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Sem conexão com o servidor SAP. Tente novamente.',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Row(children: [
+          Icon(Icons.wifi_off_rounded, color: Colors.white),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text('Sem conexão com o servidor SAP. Tente novamente.',
+                style: TextStyle(fontWeight: FontWeight.bold)),
           ),
-          backgroundColor: Colors.red.shade700,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
-      );
+        ]),
+        backgroundColor: Colors.red.shade700,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ));
     } finally {
       if (mounted) setState(() => _carregando = false);
     }
   }
 
-  // ─── INTERPRETAÇÃO DE ERROS SAP ────────────────────────────────────────────
+  // ─── ERROS SAP ──────────────────────────────────────────────────────────────
 
-  /// Converte a mensagem bruta do SAP em uma estrutura amigável para o usuário.
   _ErroSap _interpretarErroSap(String mensagemBruta) {
     final msg = mensagemBruta.toUpperCase();
 
-    // Tenta identificar qual item/depósito da lista causou o erro
-    String itemEncontrado = '';
+    String itemEncontrado    = '';
     String depositoEncontrado = '';
-    for (var contagem in _contagensOffline) {
-      final codigo = contagem['itemCode'].toString().trim().toUpperCase();
-      final deposito = contagem['warehouseCode']?.toString().trim() ?? '';
+    for (var c in _contagensOffline) {
+      final codigo   = c['itemCode'].toString().trim().toUpperCase();
+      final deposito = c['warehouseCode']?.toString().trim() ?? '';
       if (msg.contains(codigo)) {
-        itemEncontrado = contagem['itemCode'].toString().trim();
+        itemEncontrado    = c['itemCode'].toString().trim();
         depositoEncontrado = deposito;
         break;
       }
     }
 
-    // ── Contagem já aberta no SAP ──
     if (mensagemBruta.contains('-1310') ||
         mensagemBruta.contains('1470000497') ||
         msg.contains('ALREADY')) {
@@ -171,7 +166,6 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    // ── Depósito inválido ou não encontrado ──
     if (msg.contains('WAREHOUSE') ||
         msg.contains('WAREHOUSECODE') ||
         msg.contains('-5002')) {
@@ -187,7 +181,6 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    // ── Item não encontrado no SAP ──
     if (msg.contains('ITEM') &&
         (msg.contains('NOT FOUND') || msg.contains('-4002'))) {
       return _ErroSap(
@@ -202,7 +195,6 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    // ── Sessão expirada ──
     if (msg.contains('SESSION') ||
         msg.contains('401') ||
         msg.contains('UNAUTHORIZED')) {
@@ -216,23 +208,19 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    // ── Falha de conexão ──
     if (msg.contains('TIMEOUT') ||
         msg.contains('CONNECTION') ||
-        msg.contains('FALHA DE COMUNICAÇÃO') ||
         msg.contains('SOCKET')) {
       return _ErroSap(
         icone: Icons.wifi_off_rounded,
         cor: Colors.red.shade700,
         titulo: 'Falha de comunicação',
-        mensagem:
-            'Não foi possível conectar ao servidor SAP Business One.',
+        mensagem: 'Não foi possível conectar ao servidor SAP Business One.',
         orientacao:
             'Verifique se você está conectado à rede corporativa e se o servidor SAP está acessível.',
       );
     }
 
-    // ── Fallback genérico — sem JSON exposto ──
     return _ErroSap(
       icone: Icons.error_outline_rounded,
       cor: Colors.red.shade700,
@@ -259,45 +247,33 @@ class _HomePageState extends State<HomePage> {
         builder: (context, setDialogState) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: erro.cor.withAlpha(26),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(erro.icone, color: erro.cor, size: 24),
+          title: Row(children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: erro.cor.withAlpha(26),
+                borderRadius: BorderRadius.circular(8),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  erro.titulo,
+              child: Icon(erro.icone, color: erro.cor, size: 24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(erro.titulo,
                   style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey.shade900,
-                  ),
-                ),
-              ),
-            ],
-          ),
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade900)),
+            ),
+          ]),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 12),
-
-                // Mensagem principal — amigável
-                Text(
-                  erro.mensagem,
-                  style: const TextStyle(fontSize: 14, height: 1.5),
-                ),
-
+                Text(erro.mensagem,
+                    style: const TextStyle(fontSize: 14, height: 1.5)),
                 const SizedBox(height: 16),
-
-                // Orientação de como resolver
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -312,46 +288,34 @@ class _HomePageState extends State<HomePage> {
                           color: Colors.blue.shade700, size: 18),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
-                          erro.orientacao,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.blue.shade800,
-                            height: 1.4,
-                          ),
-                        ),
+                        child: Text(erro.orientacao,
+                            style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.blue.shade800,
+                                height: 1.4)),
                       ),
                     ],
                   ),
                 ),
-
-                // Detalhe técnico expansível — oculto por padrão
                 if (erro.codigoTecnico != null) ...[
                   const SizedBox(height: 12),
                   GestureDetector(
                     onTap: () => setDialogState(
                         () => mostrarDetalhe = !mostrarDetalhe),
-                    child: Row(
-                      children: [
-                        Icon(
+                    child: Row(children: [
+                      Icon(
                           mostrarDetalhe
                               ? Icons.expand_less_rounded
                               : Icons.expand_more_rounded,
-                          size: 18,
-                          color: Colors.grey.shade500,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
+                          size: 18, color: Colors.grey.shade500),
+                      const SizedBox(width: 4),
+                      Text(
                           mostrarDetalhe
                               ? 'Ocultar detalhe técnico'
                               : 'Ver detalhe técnico',
                           style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey.shade500,
-                          ),
-                        ),
-                      ],
-                    ),
+                              fontSize: 12, color: Colors.grey.shade500)),
+                    ]),
                   ),
                   if (mostrarDetalhe) ...[
                     const SizedBox(height: 8),
@@ -366,11 +330,10 @@ class _HomePageState extends State<HomePage> {
                       child: Text(
                         erro.codigoTecnico!,
                         style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 10,
-                          color: Colors.blueGrey.shade600,
-                          height: 1.4,
-                        ),
+                            fontFamily: 'monospace',
+                            fontSize: 10,
+                            color: Colors.blueGrey.shade600,
+                            height: 1.4),
                       ),
                     ),
                   ],
@@ -380,30 +343,23 @@ class _HomePageState extends State<HomePage> {
           ),
           actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           actions: [
-            // Botão contextual — aparece só quando faz sentido navegar
             if (erro.titulo.contains('Depósito'))
               TextButton(
                 onPressed: () {
+                  HapticFeedback.selectionClick();
                   Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const ApiConfigPage()),
-                  );
+                  Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => const ApiConfigPage()));
                 },
-                child: Text(
-                  'IR PARA CONFIGURAÇÕES',
-                  style: TextStyle(
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                child: Text('IR PARA CONFIGURAÇÕES',
+                    style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontWeight: FontWeight.w600)),
               ),
-
             ElevatedButton(
               onPressed: () {
                 HapticFeedback.lightImpact();
                 Navigator.pop(context);
-                // Sessão expirada → redireciona para login automaticamente
                 if (erro.titulo.contains('expirada')) {
                   Navigator.pushAndRemoveUntil(
                     context,
@@ -417,13 +373,11 @@ class _HomePageState extends State<HomePage> {
                 foregroundColor: Colors.white,
                 minimumSize: const Size(100, 40),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
+                    borderRadius: BorderRadius.circular(8)),
               ),
               child: Text(
-                erro.titulo.contains('expirada') ? 'FAZER LOGIN' : 'ENTENDIDO',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
+                  erro.titulo.contains('expirada') ? 'FAZER LOGIN' : 'ENTENDIDO',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
         ),
@@ -437,10 +391,8 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          "Painel STOX",
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
+        title: const Text('Painel STOX',
+            style: TextStyle(fontWeight: FontWeight.bold)),
         elevation: 0,
         actions: [
           IconButton(
@@ -449,29 +401,26 @@ class _HomePageState extends State<HomePage> {
               HapticFeedback.lightImpact();
               _carregarDadosLocais();
             },
-            tooltip: "Recarregar Dados",
+            tooltip: 'Recarregar Dados',
           ),
         ],
       ),
       drawer: _buildDrawer(),
       body: SafeArea(
-        child: Column(
-          children: [
-            _buildSummaryHeader(),
-            Expanded(
-              child: _contagensOffline.isEmpty
-                  ? _buildEmptyState()
-                  : _buildContagensList(),
-            ),
-          ],
-        ),
+        child: Column(children: [
+          _buildSummaryHeader(),
+          Expanded(
+            child: _contagensOffline.isEmpty
+                ? _buildEmptyState()
+                : _buildContagensList(),
+          ),
+        ]),
       ),
     );
   }
 
   Widget _buildSummaryHeader() {
     final theme = Theme.of(context);
-
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
@@ -480,33 +429,26 @@ class _HomePageState extends State<HomePage> {
         borderRadius: const BorderRadius.vertical(bottom: Radius.circular(32)),
         boxShadow: [
           BoxShadow(
-            color: theme.primaryColor.withAlpha(77),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
-          ),
+              color: theme.primaryColor.withAlpha(77),
+              blurRadius: 12,
+              offset: const Offset(0, 6)),
         ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
-            "Itens aguardando envio",
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
+          const Text('Itens aguardando envio',
+              style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500)),
           const SizedBox(height: 4),
-          Text(
-            "${_contagensOffline.length}",
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 56,
-              fontWeight: FontWeight.bold,
-              letterSpacing: -1,
-            ),
-          ),
+          Text('${_contagensOffline.length}',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 56,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: -1)),
           const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
@@ -517,18 +459,12 @@ class _HomePageState extends State<HomePage> {
                   : _sincronizarComSAP,
               icon: _carregando
                   ? const SizedBox(
-                      width: 20,
-                      height: 20,
+                      width: 20, height: 20,
                       child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        color: Colors.white,
-                      ),
-                    )
+                          strokeWidth: 2.5, color: Colors.white))
                   : const Icon(Icons.cloud_upload_rounded),
-              label: const Text(
-                "SINCRONIZAR AGORA",
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
+              label: const Text('SINCRONIZAR AGORA',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.green.shade600,
                 foregroundColor: Colors.white,
@@ -536,8 +472,7 @@ class _HomePageState extends State<HomePage> {
                 disabledForegroundColor: Colors.white70,
                 elevation: 0,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
+                    borderRadius: BorderRadius.circular(14)),
               ),
             ),
           ),
@@ -551,7 +486,7 @@ class _HomePageState extends State<HomePage> {
       padding: const EdgeInsets.fromLTRB(16, 24, 16, 80),
       itemCount: _contagensOffline.length,
       itemBuilder: (context, index) {
-        final item = _contagensOffline[index];
+        final item    = _contagensOffline[index];
         final deposito = item['warehouseCode'] ?? '01';
 
         return Card(
@@ -562,29 +497,22 @@ class _HomePageState extends State<HomePage> {
             side: BorderSide(color: Colors.grey.shade300),
           ),
           child: ListTile(
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 6,
-            ),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             leading: CircleAvatar(
-              backgroundColor: Theme.of(context).primaryColor.withAlpha(26),
+              backgroundColor:
+                  Theme.of(context).primaryColor.withAlpha(26),
               radius: 22,
-              child: Icon(
-                Icons.inventory_2_rounded,
-                color: Theme.of(context).primaryColor,
-                size: 22,
-              ),
+              child: Icon(Icons.inventory_2_rounded,
+                  color: Theme.of(context).primaryColor, size: 22),
             ),
-            title: Text(
-              "${item['itemCode']}",
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-            ),
+            title: Text('${item['itemCode']}',
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold, fontSize: 16)),
             subtitle: Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                "Qtd: ${item['quantidade']}  •  Dep: $deposito",
-                style: TextStyle(color: Colors.grey.shade700),
-              ),
+              child: Text('Qtd: ${item['quantidade']}  •  Dep: $deposito',
+                  style: TextStyle(color: Colors.grey.shade700)),
             ),
             trailing: IconButton(
               icon: Icon(Icons.delete_outline_rounded,
@@ -609,26 +537,19 @@ class _HomePageState extends State<HomePage> {
           Container(
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: Colors.green.shade50,
-              shape: BoxShape.circle,
-            ),
+                color: Colors.green.shade50, shape: BoxShape.circle),
             child: Icon(Icons.cloud_done_rounded,
                 size: 64, color: Colors.green.shade400),
           ),
           const SizedBox(height: 24),
-          Text(
-            "Tudo sincronizado!",
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey.shade800,
-            ),
-          ),
+          Text('Tudo sincronizado!',
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey.shade800)),
           const SizedBox(height: 8),
-          Text(
-            "Não há contagens pendentes para envio.",
-            style: TextStyle(color: Colors.grey.shade600),
-          ),
+          Text('Não há contagens pendentes para envio.',
+              style: TextStyle(color: Colors.grey.shade600)),
         ],
       ),
     );
@@ -636,107 +557,99 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildDrawer() {
     final theme = Theme.of(context);
-
     return Drawer(
-      child: Column(
-        children: [
-          UserAccountsDrawerHeader(
-            decoration: BoxDecoration(color: theme.primaryColor),
-            currentAccountPicture: const CircleAvatar(
-              backgroundColor: Colors.white,
-              child: Icon(Icons.person_rounded, size: 40, color: Colors.grey),
-            ),
-            accountName: Text(
-              _nomeOperador,
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-            ),
-            accountEmail: const Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.greenAccent, size: 14),
-                SizedBox(width: 6),
-                Text("SAP Business One Conectado"),
-              ],
-            ),
+      child: Column(children: [
+        UserAccountsDrawerHeader(
+          decoration: BoxDecoration(color: theme.primaryColor),
+          currentAccountPicture: const CircleAvatar(
+            backgroundColor: Colors.white,
+            child: Icon(Icons.person_rounded, size: 40, color: Colors.grey),
           ),
-          Expanded(
-            child: ListView(
-              padding: EdgeInsets.zero,
-              children: [
-                ListTile(
-                  leading:
-                      Icon(Icons.add_box_rounded, color: theme.primaryColor),
-                  title: const Text("Nova Contagem Offline",
-                      style: TextStyle(fontWeight: FontWeight.w500)),
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => const ContadorOfflinePage()),
-                    ).then((_) => _carregarDadosLocais());
-                  },
-                ),
-                ListTile(
-                  leading:
-                      Icon(Icons.search_rounded, color: theme.primaryColor),
-                  title: const Text("Pesquisar Item SAP",
-                      style: TextStyle(fontWeight: FontWeight.w500)),
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const ItemSearchPage()),
-                    );
-                  },
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
-                  child: Divider(),
-                ),
-                ListTile(
-                  leading: Icon(Icons.settings_rounded,
-                      color: Colors.grey.shade600),
-                  title: Text(
-                    "Configurações da API",
+          accountName: Text(_nomeOperador,
+              style: const TextStyle(
+                  fontWeight: FontWeight.bold, fontSize: 16)),
+          accountEmail: const Row(children: [
+            Icon(Icons.check_circle, color: Colors.greenAccent, size: 14),
+            SizedBox(width: 6),
+            Text('SAP Business One Conectado'),
+          ]),
+        ),
+        Expanded(
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              ListTile(
+                leading: Icon(Icons.add_box_rounded,
+                    color: theme.primaryColor),
+                title: const Text('Nova Contagem Offline',
+                    style: TextStyle(fontWeight: FontWeight.w500)),
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const ContadorOfflinePage()),
+                  ).then((_) => _carregarDadosLocais());
+                },
+              ),
+              ListTile(
+                leading: Icon(Icons.search_rounded,
+                    color: theme.primaryColor),
+                title: const Text('Pesquisar Item SAP',
+                    style: TextStyle(fontWeight: FontWeight.w500)),
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const ItemSearchPage()),
+                  );
+                },
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Divider(),
+              ),
+              ListTile(
+                leading: Icon(Icons.settings_rounded,
+                    color: Colors.grey.shade600),
+                title: Text('Configurações da API',
                     style: TextStyle(
                         color: Colors.grey.shade800,
-                        fontWeight: FontWeight.w500),
-                  ),
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const ApiConfigPage()),
-                    );
-                  },
-                ),
-              ],
-            ),
+                        fontWeight: FontWeight.w500)),
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ApiConfigPage()),
+                  );
+                },
+              ),
+            ],
           ),
-          const Divider(height: 1),
-          ListTile(
-            leading: const Icon(Icons.logout_rounded, color: Colors.red),
-            title: const Text(
-              "Sair da Conta",
-              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
-            ),
-            onTap: () async {
-              HapticFeedback.heavyImpact();
-              await SapService.logout();
-              if (!mounted) return;
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const LoginPage()),
-                (r) => false,
-              );
-            },
-          ),
-          const SizedBox(height: 24),
-        ],
-      ),
+        ),
+        const Divider(height: 1),
+        ListTile(
+          leading: const Icon(Icons.logout_rounded, color: Colors.red),
+          title: const Text('Sair da Conta',
+              style: TextStyle(
+                  color: Colors.red, fontWeight: FontWeight.bold)),
+          onTap: () async {
+            HapticFeedback.heavyImpact();
+            await SapService.logout();
+            if (!mounted) return;
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (_) => const LoginPage()),
+              (r) => false,
+            );
+          },
+        ),
+        const SizedBox(height: 24),
+      ]),
     );
   }
 }
@@ -749,7 +662,7 @@ class _ErroSap {
   final String titulo;
   final String mensagem;
   final String orientacao;
-  final String? codigoTecnico; // oculto por padrão, expansível pelo usuário
+  final String? codigoTecnico;
 
   const _ErroSap({
     required this.icone,
