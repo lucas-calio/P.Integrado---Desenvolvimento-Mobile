@@ -55,10 +55,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> _tocarFeedback(
-    String assetPath, {
-    bool isError = false,
-  }) async {
+  Future<void> _tocarFeedback(String assetPath, {bool isError = false}) async {
     try {
       if (await Vibration.hasVibrator()) {
         if (isError) {
@@ -82,8 +79,7 @@ class _HomePageState extends State<HomePage> {
     setState(() => _carregando = true);
 
     try {
-      final erro =
-          await SapService.postInventoryCounting(_contagensOffline);
+      final erro = await SapService.postInventoryCounting(_contagensOffline);
 
       if (erro == null) {
         await _tocarFeedback('sounds/check.mp3');
@@ -105,9 +101,7 @@ class _HomePageState extends State<HomePage> {
             ),
             backgroundColor: Colors.green.shade700,
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         );
       } else {
@@ -120,23 +114,21 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Row(
+          content: const Row(
             children: [
-              const Icon(Icons.error_outline, color: Colors.white),
-              const SizedBox(width: 8),
+              Icon(Icons.wifi_off_rounded, color: Colors.white),
+              SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Erro: $e',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  'Sem conexão com o servidor SAP. Tente novamente.',
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
             ],
           ),
           backgroundColor: Colors.red.shade700,
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
       );
     } finally {
@@ -144,124 +136,302 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  void _exibirErroSap(String mensagemBruta) {
-    bool isItemDuplicado = mensagemBruta.contains("-1310") ||
-        mensagemBruta.contains("1470000497") ||
-        mensagemBruta.toLowerCase().contains("already");
+  // ─── INTERPRETAÇÃO DE ERROS SAP ────────────────────────────────────────────
 
-    String itemEncontrado = "";
+  /// Converte a mensagem bruta do SAP em uma estrutura amigável para o usuário.
+  _ErroSap _interpretarErroSap(String mensagemBruta) {
+    final msg = mensagemBruta.toUpperCase();
+
+    // Tenta identificar qual item/depósito da lista causou o erro
+    String itemEncontrado = '';
+    String depositoEncontrado = '';
     for (var contagem in _contagensOffline) {
-      String codigo = contagem['itemCode'].toString().trim();
-      if (mensagemBruta.toUpperCase().contains(codigo.toUpperCase())) {
-        itemEncontrado = codigo;
+      final codigo = contagem['itemCode'].toString().trim().toUpperCase();
+      final deposito = contagem['warehouseCode']?.toString().trim() ?? '';
+      if (msg.contains(codigo)) {
+        itemEncontrado = contagem['itemCode'].toString().trim();
+        depositoEncontrado = deposito;
         break;
       }
     }
 
+    // ── Contagem já aberta no SAP ──
+    if (mensagemBruta.contains('-1310') ||
+        mensagemBruta.contains('1470000497') ||
+        msg.contains('ALREADY')) {
+      return _ErroSap(
+        icone: Icons.lock_clock_rounded,
+        cor: Colors.orange.shade700,
+        titulo: 'Contagem já aberta no SAP',
+        mensagem: itemEncontrado.isNotEmpty
+            ? 'O item "$itemEncontrado" já possui uma contagem de inventário aberta e não finalizada no SAP Business One.'
+            : 'Um dos itens já possui uma contagem de inventário aberta e não finalizada no SAP.',
+        orientacao:
+            'Para resolver: acesse o SAP Business One → Estoque → Contagem de Estoque e finalize ou cancele a contagem existente antes de sincronizar novamente.',
+      );
+    }
+
+    // ── Depósito inválido ou não encontrado ──
+    if (msg.contains('WAREHOUSE') ||
+        msg.contains('WAREHOUSECODE') ||
+        msg.contains('-5002')) {
+      return _ErroSap(
+        icone: Icons.warehouse_rounded,
+        cor: Colors.orange.shade700,
+        titulo: 'Depósito inválido',
+        mensagem: depositoEncontrado.isNotEmpty
+            ? 'O depósito "$depositoEncontrado" não foi encontrado no SAP Business One.'
+            : 'Um dos depósitos informados não existe no SAP Business One.',
+        orientacao:
+            'Verifique o código do depósito nas Configurações da API ou edite as contagens com o código correto.',
+      );
+    }
+
+    // ── Item não encontrado no SAP ──
+    if (msg.contains('ITEM') &&
+        (msg.contains('NOT FOUND') || msg.contains('-4002'))) {
+      return _ErroSap(
+        icone: Icons.inventory_2_rounded,
+        cor: Colors.orange.shade700,
+        titulo: 'Item não encontrado',
+        mensagem: itemEncontrado.isNotEmpty
+            ? 'O item "$itemEncontrado" não foi encontrado no cadastro do SAP Business One.'
+            : 'Um dos itens da contagem não existe no cadastro do SAP Business One.',
+        orientacao:
+            'Verifique se o código do item está correto e se ele está cadastrado na base do SAP.',
+      );
+    }
+
+    // ── Sessão expirada ──
+    if (msg.contains('SESSION') ||
+        msg.contains('401') ||
+        msg.contains('UNAUTHORIZED')) {
+      return _ErroSap(
+        icone: Icons.lock_rounded,
+        cor: Colors.red.shade700,
+        titulo: 'Sessão expirada',
+        mensagem: 'Sua sessão no SAP Business One expirou.',
+        orientacao:
+            'Faça login novamente para continuar. Seus dados de contagem estão salvos.',
+      );
+    }
+
+    // ── Falha de conexão ──
+    if (msg.contains('TIMEOUT') ||
+        msg.contains('CONNECTION') ||
+        msg.contains('FALHA DE COMUNICAÇÃO') ||
+        msg.contains('SOCKET')) {
+      return _ErroSap(
+        icone: Icons.wifi_off_rounded,
+        cor: Colors.red.shade700,
+        titulo: 'Falha de comunicação',
+        mensagem:
+            'Não foi possível conectar ao servidor SAP Business One.',
+        orientacao:
+            'Verifique se você está conectado à rede corporativa e se o servidor SAP está acessível.',
+      );
+    }
+
+    // ── Fallback genérico — sem JSON exposto ──
+    return _ErroSap(
+      icone: Icons.error_outline_rounded,
+      cor: Colors.red.shade700,
+      titulo: 'Erro na sincronização',
+      mensagem: itemEncontrado.isNotEmpty
+          ? 'Ocorreu um erro ao processar o item "$itemEncontrado".'
+          : 'Ocorreu um erro ao enviar os dados para o SAP Business One.',
+      orientacao:
+          'Tente sincronizar novamente. Se o erro persistir, entre em contato com o administrador do sistema.',
+      codigoTecnico: mensagemBruta.length > 200
+          ? '${mensagemBruta.substring(0, 200)}...'
+          : mensagemBruta,
+    );
+  }
+
+  void _exibirErroSap(String mensagemBruta) {
+    final erro = _interpretarErroSap(mensagemBruta);
+    bool mostrarDetalhe = false;
+
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        title: Row(
-          children: [
-            Icon(
-              isItemDuplicado
-                  ? Icons.warning_amber_rounded
-                  : Icons.error_outline,
-              color: isItemDuplicado
-                  ? Colors.orange.shade700
-                  : Colors.red.shade700,
-              size: 28,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                isItemDuplicado ? "Conflito de Itens" : "Erro na API",
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+          title: Row(
             children: [
-              Text(
-                "Problema na sincronização:",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey.shade800,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                isItemDuplicado
-                    ? "O SAP informou que o item ${itemEncontrado.isNotEmpty ? itemEncontrado : 'selecionado'} já possui uma contagem aberta e não finalizada."
-                    : "Ocorreu um erro ao processar os dados enviados para o SAP Business One.",
-                style: const TextStyle(fontSize: 15),
-              ),
-              const SizedBox(height: 20),
-              const Divider(),
-              const SizedBox(height: 8),
-              Text(
-                "Log Técnico do SAP:",
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey.shade600,
-                ),
-              ),
-              const SizedBox(height: 4),
               Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
+                  color: erro.cor.withAlpha(26),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey.shade300),
                 ),
+                child: Icon(erro.icone, color: erro.cor, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
                 child: Text(
-                  mensagemBruta,
+                  erro.titulo,
                   style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 11,
-                    color: Colors.blueGrey.shade700,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey.shade900,
                   ),
                 ),
               ),
             ],
           ),
-        ),
-        actionsPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        actions: [
-          ElevatedButton(
-            onPressed: () {
-              HapticFeedback.lightImpact();
-              Navigator.pop(context);
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: isItemDuplicado
-                  ? Colors.orange.shade700
-                  : Colors.red.shade700,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            child: const Text(
-              "ENTENDI",
-              style: TextStyle(fontWeight: FontWeight.bold),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 12),
+
+                // Mensagem principal — amigável
+                Text(
+                  erro.mensagem,
+                  style: const TextStyle(fontSize: 14, height: 1.5),
+                ),
+
+                const SizedBox(height: 16),
+
+                // Orientação de como resolver
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade100),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline_rounded,
+                          color: Colors.blue.shade700, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          erro.orientacao,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.blue.shade800,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Detalhe técnico expansível — oculto por padrão
+                if (erro.codigoTecnico != null) ...[
+                  const SizedBox(height: 12),
+                  GestureDetector(
+                    onTap: () => setDialogState(
+                        () => mostrarDetalhe = !mostrarDetalhe),
+                    child: Row(
+                      children: [
+                        Icon(
+                          mostrarDetalhe
+                              ? Icons.expand_less_rounded
+                              : Icons.expand_more_rounded,
+                          size: 18,
+                          color: Colors.grey.shade500,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          mostrarDetalhe
+                              ? 'Ocultar detalhe técnico'
+                              : 'Ver detalhe técnico',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (mostrarDetalhe) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: Text(
+                        erro.codigoTecnico!,
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 10,
+                          color: Colors.blueGrey.shade600,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ],
             ),
           ),
-        ],
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          actions: [
+            // Botão contextual — aparece só quando faz sentido navegar
+            if (erro.titulo.contains('Depósito'))
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ApiConfigPage()),
+                  );
+                },
+                child: Text(
+                  'IR PARA CONFIGURAÇÕES',
+                  style: TextStyle(
+                    color: Colors.grey.shade600,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+
+            ElevatedButton(
+              onPressed: () {
+                HapticFeedback.lightImpact();
+                Navigator.pop(context);
+                // Sessão expirada → redireciona para login automaticamente
+                if (erro.titulo.contains('expirada')) {
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (_) => const LoginPage()),
+                    (r) => false,
+                  );
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: erro.cor,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(100, 40),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: Text(
+                erro.titulo.contains('expirada') ? 'FAZER LOGIN' : 'ENTENDIDO',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
+
+  // ─── BUILD ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -307,12 +477,9 @@ class _HomePageState extends State<HomePage> {
       padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
       decoration: BoxDecoration(
         color: theme.primaryColor,
-        borderRadius: const BorderRadius.vertical(
-          bottom: Radius.circular(32),
-        ),
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(32)),
         boxShadow: [
           BoxShadow(
-            // ✅ FIX: withOpacity(0.3) → withAlpha(77)  (0.3 * 255 ≈ 77)
             color: theme.primaryColor.withAlpha(77),
             blurRadius: 12,
             offset: const Offset(0, 6),
@@ -345,10 +512,9 @@ class _HomePageState extends State<HomePage> {
             width: double.infinity,
             height: 54,
             child: ElevatedButton.icon(
-              onPressed:
-                  _carregando || _contagensOffline.isEmpty
-                      ? null
-                      : _sincronizarComSAP,
+              onPressed: _carregando || _contagensOffline.isEmpty
+                  ? null
+                  : _sincronizarComSAP,
               icon: _carregando
                   ? const SizedBox(
                       width: 20,
@@ -401,9 +567,7 @@ class _HomePageState extends State<HomePage> {
               vertical: 6,
             ),
             leading: CircleAvatar(
-              // ✅ FIX: withOpacity(0.1) → withAlpha(26)  (0.1 * 255 ≈ 26)
-              backgroundColor:
-                  Theme.of(context).primaryColor.withAlpha(26),
+              backgroundColor: Theme.of(context).primaryColor.withAlpha(26),
               radius: 22,
               child: Icon(
                 Icons.inventory_2_rounded,
@@ -413,10 +577,7 @@ class _HomePageState extends State<HomePage> {
             ),
             title: Text(
               "${item['itemCode']}",
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
             subtitle: Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -426,10 +587,8 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
             trailing: IconButton(
-              icon: Icon(
-                Icons.delete_outline_rounded,
-                color: Colors.red.shade400,
-              ),
+              icon: Icon(Icons.delete_outline_rounded,
+                  color: Colors.red.shade400),
               onPressed: () async {
                 HapticFeedback.vibrate();
                 await DatabaseHelper.instance.excluirContagem(item['id']);
@@ -453,11 +612,8 @@ class _HomePageState extends State<HomePage> {
               color: Colors.green.shade50,
               shape: BoxShape.circle,
             ),
-            child: Icon(
-              Icons.cloud_done_rounded,
-              size: 64,
-              color: Colors.green.shade400,
-            ),
+            child: Icon(Icons.cloud_done_rounded,
+                size: 64, color: Colors.green.shade400),
           ),
           const SizedBox(height: 24),
           Text(
@@ -488,18 +644,11 @@ class _HomePageState extends State<HomePage> {
             decoration: BoxDecoration(color: theme.primaryColor),
             currentAccountPicture: const CircleAvatar(
               backgroundColor: Colors.white,
-              child: Icon(
-                Icons.person_rounded,
-                size: 40,
-                color: Colors.grey,
-              ),
+              child: Icon(Icons.person_rounded, size: 40, color: Colors.grey),
             ),
             accountName: Text(
               _nomeOperador,
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-              ),
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
             accountEmail: const Row(
               children: [
@@ -514,42 +663,31 @@ class _HomePageState extends State<HomePage> {
               padding: EdgeInsets.zero,
               children: [
                 ListTile(
-                  leading: Icon(
-                    Icons.add_box_rounded,
-                    color: theme.primaryColor,
-                  ),
-                  title: const Text(
-                    "Nova Contagem Offline",
-                    style: TextStyle(fontWeight: FontWeight.w500),
-                  ),
+                  leading:
+                      Icon(Icons.add_box_rounded, color: theme.primaryColor),
+                  title: const Text("Nova Contagem Offline",
+                      style: TextStyle(fontWeight: FontWeight.w500)),
                   onTap: () {
                     HapticFeedback.selectionClick();
                     Navigator.pop(context);
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => const ContadorOfflinePage(),
-                      ),
+                          builder: (_) => const ContadorOfflinePage()),
                     ).then((_) => _carregarDadosLocais());
                   },
                 ),
                 ListTile(
-                  leading: Icon(
-                    Icons.search_rounded,
-                    color: theme.primaryColor,
-                  ),
-                  title: const Text(
-                    "Pesquisar Item SAP",
-                    style: TextStyle(fontWeight: FontWeight.w500),
-                  ),
+                  leading:
+                      Icon(Icons.search_rounded, color: theme.primaryColor),
+                  title: const Text("Pesquisar Item SAP",
+                      style: TextStyle(fontWeight: FontWeight.w500)),
                   onTap: () {
                     HapticFeedback.selectionClick();
                     Navigator.pop(context);
                     Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => const ItemSearchPage(),
-                      ),
+                      MaterialPageRoute(builder: (_) => const ItemSearchPage()),
                     );
                   },
                 ),
@@ -558,25 +696,20 @@ class _HomePageState extends State<HomePage> {
                   child: Divider(),
                 ),
                 ListTile(
-                  leading: Icon(
-                    Icons.settings_rounded,
-                    color: Colors.grey.shade600,
-                  ),
+                  leading: Icon(Icons.settings_rounded,
+                      color: Colors.grey.shade600),
                   title: Text(
                     "Configurações da API",
                     style: TextStyle(
-                      color: Colors.grey.shade800,
-                      fontWeight: FontWeight.w500,
-                    ),
+                        color: Colors.grey.shade800,
+                        fontWeight: FontWeight.w500),
                   ),
                   onTap: () {
                     HapticFeedback.selectionClick();
                     Navigator.pop(context);
                     Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => const ApiConfigPage(),
-                      ),
+                      MaterialPageRoute(builder: (_) => const ApiConfigPage()),
                     );
                   },
                 ),
@@ -588,10 +721,7 @@ class _HomePageState extends State<HomePage> {
             leading: const Icon(Icons.logout_rounded, color: Colors.red),
             title: const Text(
               "Sair da Conta",
-              style: TextStyle(
-                color: Colors.red,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
             ),
             onTap: () async {
               HapticFeedback.heavyImpact();
@@ -609,4 +739,24 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+}
+
+// ─── MODELO DE ERRO AMIGÁVEL ──────────────────────────────────────────────────
+
+class _ErroSap {
+  final IconData icone;
+  final Color cor;
+  final String titulo;
+  final String mensagem;
+  final String orientacao;
+  final String? codigoTecnico; // oculto por padrão, expansível pelo usuário
+
+  const _ErroSap({
+    required this.icone,
+    required this.cor,
+    required this.titulo,
+    required this.mensagem,
+    required this.orientacao,
+    this.codigoTecnico,
+  });
 }

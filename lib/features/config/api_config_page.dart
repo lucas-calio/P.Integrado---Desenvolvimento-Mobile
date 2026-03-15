@@ -182,6 +182,7 @@ class _ApiConfigPageState extends State<ApiConfigPage> {
                     ),
                   ),
                   value: _permitirSslInseguro,
+                  // ignore: deprecated_member_use
                   activeColor: primaryColor,
                   onChanged: (bool value) {
                     HapticFeedback.selectionClick();
