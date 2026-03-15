@@ -117,7 +117,8 @@ class SapService {
           "B1SESSION=$session${routeId != null ? '; ROUTEID=$routeId' : ''}";
 
       final response = await client
-          .get(fullUri, headers: {"Cookie": cookieHeader, "Accept": "application/json"})
+          .get(fullUri,
+              headers: {"Cookie": cookieHeader, "Accept": "application/json"})
           .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
@@ -166,6 +167,15 @@ class SapService {
   // MÉTODOS DE CONSULTA
   // ==========================================
 
+  /// Retorna true se há sessão SAP ativa no dispositivo.
+  /// Não faz requisição de rede — apenas verifica o SharedPreferences.
+  static Future<bool> verificarSessao() async {
+    final prefs   = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('sap_url')  ?? '';
+    final session = prefs.getString('B1SESSION') ?? '';
+    return baseUrl.isNotEmpty && session.isNotEmpty;
+  }
+
   static Future<List<dynamic>> searchItems(String termo) async {
     final prefs = await SharedPreferences.getInstance();
     final baseUrl = prefs.getString('sap_url');
@@ -188,7 +198,8 @@ class SapService {
           "B1SESSION=$session${routeId != null ? '; ROUTEID=$routeId' : ''}";
 
       final response = await client
-          .get(fullUri, headers: {"Cookie": cookieHeader, "Accept": "application/json"})
+          .get(fullUri,
+              headers: {"Cookie": cookieHeader, "Accept": "application/json"})
           .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
@@ -218,8 +229,20 @@ class SapService {
       final cleanCode =
           itemCode.trim().toUpperCase().replaceAll("'", "''");
 
+      // Campos confirmados com o JSON real do SAP B1
       const fields =
-          "ItemCode,ItemName,InventoryUOM,InventoryItem,SalesItem,PurchaseItem,Frozen,ItemWarehouseInfoCollection";
+          'ItemCode,ItemName,ForeignName,InventoryUOM,'
+          'InventoryItem,SalesItem,PurchaseItem,Frozen,'
+          'BarCode,SWW,ItemsGroupCode,NCMCode,'
+          'MinInventory,MaxInventory,MinOrderQuantity,'
+          'ManageBatchNumbers,ManageSerialNumbers,'
+          'SalesUnitWeight,SalesUnitHeight,SalesUnitWidth,SalesUnitLength,'
+          'SalesUnit,SalesPackagingUnit,'
+          'AvgStdPrice,MovingAveragePrice,'
+          'QuantityOnStock,QuantityOrderedFromVendors,QuantityOrderedByCustomers,'
+          'Mainsupplier,Manufacturer,'
+          'ItemWarehouseInfoCollection,ItemPreferredVendors,ItemPrices';
+
       final url =
           "${_prepareUrl(baseUrl)}Items('$cleanCode')?\$select=$fields";
 
@@ -268,8 +291,6 @@ class SapService {
         final code = c['itemCode'].toString().trim().toUpperCase();
         final qtd = double.tryParse(c['quantidade'].toString()) ?? 0.0;
 
-        // ✅ FIX: warehouseCode agora vem de cada contagem (salvo no SQLite)
-        // Fallback para '01' caso o campo não exista (compatibilidade com dados antigos)
         final warehouse =
             (c['warehouseCode']?.toString().trim().isNotEmpty == true)
                 ? c['warehouseCode'].toString().trim().toUpperCase()

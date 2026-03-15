@@ -24,11 +24,11 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
   Map<String, dynamic>? _itemData;
   List<dynamic> _searchResults = [];
 
-  bool _loading          = false;
+  bool _loading            = false;
   bool _scannerProcessando = false;
 
   bool _modoSelecao = false;
-  final Set<String>                      _selecionados     = {};
+  final Set<String>                       _selecionados      = {};
   final Map<String, Map<String, dynamic>> _itensSelecionados = {};
 
   @override
@@ -41,7 +41,8 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
 
   // ─── FEEDBACK ────────────────────────────────────────────────────────────
 
-  Future<void> _play(String asset, {bool isError = false, bool isFail = false}) async {
+  Future<void> _play(String asset,
+      {bool isError = false, bool isFail = false}) async {
     try {
       if (await Vibration.hasVibrator()) {
         if (isFail) {
@@ -52,8 +53,9 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
           Vibration.vibrate(duration: 100);
         }
       } else {
-        if (isFail || isError) { HapticFeedback.vibrate(); }
-        else {
+        if (isFail || isError) {
+          HapticFeedback.vibrate();
+        } else {
           HapticFeedback.lightImpact();
         }
       }
@@ -146,9 +148,22 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
       HapticFeedback.lightImpact();
     }
     if (_modoSelecao) _sairModoSelecao();
+
+    // Verifica se há sessão SAP ativa antes de tentar qualquer requisição
+    final sessaoAtiva = await SapService.verificarSessao();
+    if (!sessaoAtiva) {
+      if (!autoSearch && mounted) {
+        await _play('sounds/error_beep.mp3', isError: true);
+        _mostrarErro(
+          'Sessão SAP não encontrada. Faça login antes de pesquisar itens.',
+        );
+      }
+      return;
+    }
+
     setState(() {
-      _loading      = true;
-      _itemData     = null;
+      _loading       = true;
+      _itemData      = null;
       _searchResults = [];
     });
     try {
@@ -190,7 +205,6 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
           _searchResults = [];
           _loading       = false;
         });
-        // Detalhe carregado → beep suave
         await _play('sounds/beep.mp3');
       }
     } catch (e) {
@@ -207,7 +221,6 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
         resultado['itemCode'] != null &&
         resultado['itemCode']!.isNotEmpty) {
       setState(() => _searchController.text = resultado['itemCode']!);
-      // OCR bem sucedido → beep
       await _play('sounds/beep.mp3');
       _buscar();
     } else {
@@ -221,8 +234,9 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
       content: Row(children: [
         const Icon(Icons.error_outline, color: Colors.white),
         const SizedBox(width: 8),
-        Expanded(child: Text(msg,
-            style: const TextStyle(fontWeight: FontWeight.bold))),
+        Expanded(
+            child: Text(msg,
+                style: const TextStyle(fontWeight: FontWeight.bold))),
       ]),
       backgroundColor: Colors.red.shade700,
       behavior: SnackBarBehavior.floating,
@@ -235,8 +249,9 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
       content: Row(children: [
         const Icon(Icons.warning_amber_rounded, color: Colors.white),
         const SizedBox(width: 8),
-        Expanded(child: Text(msg,
-            style: const TextStyle(fontWeight: FontWeight.bold))),
+        Expanded(
+            child: Text(msg,
+                style: const TextStyle(fontWeight: FontWeight.bold))),
       ]),
       backgroundColor: Colors.orange.shade700,
       behavior: SnackBarBehavior.floating,
@@ -253,10 +268,12 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => LayoutBuilder(builder: (context, constraints) {
+      builder: (context) =>
+          LayoutBuilder(builder: (context, constraints) {
         final scanWindow = Rect.fromCenter(
           center: Offset(constraints.maxWidth / 2, 200),
-          width: 280, height: 180,
+          width: 280,
+          height: 180,
         );
         return Container(
           height: MediaQuery.of(context).size.height * 0.85,
@@ -268,7 +285,8 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
             child: Column(children: [
               const SizedBox(height: 12),
               Container(
-                width: 48, height: 6,
+                width: 48,
+                height: 6,
                 decoration: BoxDecoration(
                     color: Colors.grey.shade300,
                     borderRadius: BorderRadius.circular(10)),
@@ -301,7 +319,6 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
                           final code = barcodes.first.rawValue ?? '';
                           if (code.isEmpty) return;
                           _scannerProcessando = true;
-                          // Leitura de código → beep.mp3
                           await _play('sounds/beep.mp3');
                           if (!mounted) return;
                           _searchController.text = code;
@@ -373,10 +390,14 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
           child: Column(children: [
             if (!_modoSelecao) _buildSearchBar(),
             if (_loading)
-              const Expanded(child: Center(child: CircularProgressIndicator())),
-            if (!_loading && _searchResults.isNotEmpty) _buildSearchSuggestions(),
+              const Expanded(
+                  child: Center(child: CircularProgressIndicator())),
+            if (!_loading && _searchResults.isNotEmpty)
+              _buildSearchSuggestions(),
             if (!_loading && _itemData != null) _buildResultList(),
-            if (!_loading && _itemData == null && _searchResults.isEmpty)
+            if (!_loading &&
+                _itemData == null &&
+                _searchResults.isEmpty)
               Expanded(
                 child: Center(
                   child: Column(
@@ -404,7 +425,8 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
                     onPressed: _imprimirLote,
                     icon: const Icon(Icons.print_rounded),
                     label: Text(
-                      'Imprimir ${_selecionados.length} ${_selecionados.length == 1 ? "etiqueta" : "etiquetas"}',
+                      'Imprimir ${_selecionados.length} '
+                      '${_selecionados.length == 1 ? "etiqueta" : "etiquetas"}',
                       style: const TextStyle(
                           fontWeight: FontWeight.bold, fontSize: 15),
                     ),
@@ -460,7 +482,8 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
             onTap: () => HapticFeedback.selectionClick(),
             onChanged: (value) {
               if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
-              _debounceTimer = Timer(const Duration(milliseconds: 600), () {
+              _debounceTimer =
+                  Timer(const Duration(milliseconds: 600), () {
                 if (value.trim().isNotEmpty) _buscar(autoSearch: true);
               });
             },
@@ -489,7 +512,8 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
         ),
         const SizedBox(width: 8),
         SizedBox(
-          height: 56, width: 56,
+          height: 56,
+          width: 56,
           child: ElevatedButton(
             onPressed: () => _buscar(),
             style: ElevatedButton.styleFrom(
@@ -512,16 +536,19 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
             child: Row(children: [
-              Icon(Icons.touch_app_rounded, size: 14, color: Colors.grey.shade500),
+              Icon(Icons.touch_app_rounded,
+                  size: 14, color: Colors.grey.shade500),
               const SizedBox(width: 4),
               Text('Segure um item para selecionar e imprimir em lote',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                  style:
+                      TextStyle(fontSize: 12, color: Colors.grey.shade500)),
             ]),
           ),
         if (_modoSelecao)
           Container(
             margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
               color: theme.primaryColor.withAlpha(15),
               borderRadius: BorderRadius.circular(8),
@@ -600,7 +627,8 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
                                   context,
                                   MaterialPageRoute(
                                     builder: (_) => EtiquetaPage(
-                                      itemData: Map<String, dynamic>.from(item),
+                                      itemData:
+                                          Map<String, dynamic>.from(item),
                                       deposito: '01',
                                     ),
                                   ),
@@ -626,6 +654,8 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
     );
   }
 
+  // ─── DETALHE DO ITEM ──────────────────────────────────────────────────────
+
   Widget _buildResultList() {
     return Expanded(
       child: ListView(
@@ -633,21 +663,156 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
         children: [
           _buildHeaderCard(),
           _buildStatusFlags(),
+
+          // ── Estoque por depósito ──────────────────────────────────────────
           _buildSectionTitle('Estoque por Depósito'),
           _buildWarehouseInfo(),
-          _buildSectionTitle('Informações Adicionais'),
-          _buildDetailRow('Unidade de Medida', _itemData!['InventoryUOM'] ?? 'UN'),
-          _buildDetailRow('Item Bloqueado',
+
+          // ── Identificação ─────────────────────────────────────────────────
+          _buildSectionTitle('Identificação'),
+          _buildInfoCard([
+            _buildDetailRow('Unidade de Medida',
+                _itemData!['InventoryUOM']?.toString()),
+            _buildDetailRow('Embalagem',
+                _itemData!['SalesPackagingUnit']?.toString()),
+            _buildDetailRow('Código de Barras (EAN)',
+                _itemData!['BarCode']?.toString()),
+            _buildDetailRow('Código Adicional (SWW)',
+                _itemData!['SWW']?.toString()),
+            _buildDetailRow('Nome Estrangeiro',
+                _itemData!['ForeignName']?.toString()),
+            _buildDetailRow('Grupo (código)',
+                _itemData!['ItemsGroupCode']?.toString()),
+            _buildDetailRow('NCM',
+                _itemData!['NCMCode']?.toString()),
+          ]),
+
+          // ── Controle de estoque ───────────────────────────────────────────
+          _buildSectionTitle('Controle de Estoque'),
+          _buildInfoCard([
+            _buildDetailRow(
+              'Estoque Total',
+              _formatNum(_itemData!['QuantityOnStock']),
+              destaque: true,
+            ),
+            _buildDetailRow('Pedidos de Clientes',
+                _formatNum(_itemData!['QuantityOrderedByCustomers'])),
+            _buildDetailRow('Pedidos a Fornecedores',
+                _formatNum(_itemData!['QuantityOrderedFromVendors'])),
+            _buildDetailRow('Estoque Mínimo',
+                _formatNum(_itemData!['MinInventory'])),
+            _buildDetailRow('Estoque Máximo',
+                _formatNum(_itemData!['MaxInventory'])),
+            _buildDetailRow('Qtd. Mínima de Pedido',
+                _formatNum(_itemData!['MinOrderQuantity'])),
+            _buildDetailRow('Controle por Lote',
+                _itemData!['ManageBatchNumbers'] == 'tYES' ? 'Sim' : 'Não'),
+            _buildDetailRow('Controle por Nº de Série',
+                _itemData!['ManageSerialNumbers'] == 'tYES' ? 'Sim' : 'Não'),
+          ]),
+
+          // ── Fornecimento e Preços ─────────────────────────────────────────
+          _buildSectionTitle('Fornecimento e Preços'),
+          _buildInfoCard([
+            _buildDetailRow('Fornecedor Principal',
+                _itemData!['Mainsupplier']?.toString()),
+            _buildDetailRow('Fabricante (código)',
+                _itemData!['Manufacturer']?.toString()),
+            _buildDetailRow('Preço Médio Móvel',
+                _formatPreco(_itemData!['MovingAveragePrice'])),
+            _buildDetailRow('Preço Médio / Padrão',
+                _formatPreco(_itemData!['AvgStdPrice'])),
+            _buildDetailRow('Preço Lista 1',
+                _formatPrecoLista(1)),
+          ]),
+
+          // ── Dimensões e Peso ──────────────────────────────────────────────
+          _buildSectionTitle('Dimensões e Peso'),
+          _buildInfoCard([
+            _buildDetailRow('Peso',
+                _formatMedida(_itemData!['SalesUnitWeight'], 'kg')),
+            _buildDetailRow('Altura',
+                _formatMedida(_itemData!['SalesUnitHeight'], 'm')),
+            _buildDetailRow('Largura',
+                _formatMedida(_itemData!['SalesUnitWidth'], 'm')),
+            _buildDetailRow('Comprimento',
+                _formatMedida(_itemData!['SalesUnitLength'], 'm')),
+          ]),
+
+          // ── Status ────────────────────────────────────────────────────────
+          _buildSectionTitle('Status'),
+          _buildInfoCard([
+            _buildDetailRow(
+              'Item Bloqueado',
               _itemData!['Frozen'] == 'tYES' ? 'SIM' : 'NÃO',
-              isAlert: _itemData!['Frozen'] == 'tYES'),
+              isAlert: _itemData!['Frozen'] == 'tYES',
+            ),
+          ]),
+
           const SizedBox(height: 80),
         ],
       ),
     );
   }
 
+  // ─── HELPERS DE FORMATAÇÃO ────────────────────────────────────────────────
+
+  /// Busca preço de uma lista específica do SAP
+  String? _formatPrecoLista(int lista) {
+    final prices = _itemData!['ItemPrices'] as List? ?? [];
+    try {
+      final entry = prices.firstWhere(
+        (p) => p['PriceList'] == lista && (p['Price'] ?? 0) > 0,
+      );
+      return _formatPreco(entry['Price']);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Formata número — retorna null se zero/nulo (campo fica oculto)
+  String? _formatNum(dynamic val) {
+    if (val == null) return null;
+    final n = num.tryParse(val.toString());
+    if (n == null || n == 0) return null;
+    return n % 1 == 0 ? n.toInt().toString() : n.toStringAsFixed(2);
+  }
+
+  /// Formata preço em BRL — retorna null se zero/nulo
+  String? _formatPreco(dynamic val) {
+    if (val == null) return null;
+    final n = num.tryParse(val.toString());
+    if (n == null || n == 0) return null;
+    return 'R\$ ${n.toStringAsFixed(2)}';
+  }
+
+  /// Formata medida com unidade — retorna null se zero/nulo
+  String? _formatMedida(dynamic val, String unidade) {
+    if (val == null) return null;
+    final n = num.tryParse(val.toString());
+    if (n == null || n == 0) return null;
+    return '${n.toStringAsFixed(3)} $unidade';
+  }
+
+  // ─── WIDGETS DE DETALHE ───────────────────────────────────────────────────
+
   Widget _buildHeaderCard() {
-    final theme = Theme.of(context);
+    final theme    = Theme.of(context);
+    final qtdTotal = _itemData!['QuantityOnStock'];
+    final qtdNum   = num.tryParse(qtdTotal?.toString() ?? '0') ?? 0;
+    final qtdStr   = qtdNum % 1 == 0
+        ? qtdNum.toInt().toString()
+        : qtdNum.toStringAsFixed(2);
+    final um       = _itemData!['InventoryUOM']?.toString() ?? '';
+
+    // Cor do estoque: verde se acima do mínimo, amarelo se abaixo, cinza se zero
+    final minimo   = num.tryParse(_itemData!['MinInventory']?.toString() ?? '0') ?? 0;
+    final corQtd   = qtdNum == 0
+        ? Colors.white38
+        : qtdNum < minimo
+            ? Colors.orangeAccent
+            : Colors.greenAccent;
+
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -656,16 +821,92 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(_itemData!['ItemCode'] ?? '',
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          Text(_itemData!['ItemName'] ?? '',
-              style: const TextStyle(color: Colors.white70)),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_itemData!['ItemCode'] ?? '',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    Text(_itemData!['ItemName'] ?? '',
+                        style: const TextStyle(color: Colors.white70)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              // Quantidade em destaque no canto direito
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(qtdStr,
+                      style: TextStyle(
+                          color: corQtd,
+                          fontSize: 32,
+                          fontWeight: FontWeight.bold,
+                          height: 1.0)),
+                  Text(um,
+                      style: TextStyle(
+                          color: corQtd.withAlpha(200),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500)),
+                  Text('em estoque',
+                      style: TextStyle(
+                          color: Colors.white38,
+                          fontSize: 10)),
+                ],
+              ),
+            ],
+          ),
+          // Barra visual proporcional ao estoque (min → max)
+          if (minimo > 0 || qtdNum > 0) ...[
+            const SizedBox(height: 16),
+            _buildEstoqueBarra(qtdNum, minimo,
+                num.tryParse(_itemData!['MaxInventory']?.toString() ?? '0') ?? 0),
+          ],
         ],
       ),
+    );
+  }
+
+  Widget _buildEstoqueBarra(num atual, num minimo, num maximo) {
+    final referencia = maximo > 0 ? maximo : (minimo > 0 ? minimo * 3 : atual * 1.5);
+    final pct = referencia > 0 ? (atual / referencia).clamp(0.0, 1.0).toDouble() : 0.0;
+    final cor = atual == 0
+        ? Colors.white24
+        : atual < minimo
+            ? Colors.orangeAccent
+            : Colors.greenAccent;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: pct,
+            backgroundColor: Colors.white24,
+            valueColor: AlwaysStoppedAnimation<Color>(cor),
+            minHeight: 6,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            if (minimo > 0)
+              Text('Mín: $minimo',
+                  style: const TextStyle(color: Colors.white54, fontSize: 10)),
+            if (maximo > 0)
+              Text('Máx: $maximo',
+                  style: const TextStyle(color: Colors.white54, fontSize: 10)),
+          ],
+        ),
+      ],
     );
   }
 
@@ -693,23 +934,43 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
   }
 
   Widget _buildWarehouseInfo() {
-    final list       = (_itemData!['ItemWarehouseInfoCollection'] as List? ?? []);
-    final warehouses = list.where((wh) => (wh['InStock'] ?? 0) > 0).toList();
+    final list       =
+        (_itemData!['ItemWarehouseInfoCollection'] as List? ?? []);
+    final warehouses =
+        list.where((wh) => (wh['InStock'] ?? 0) > 0).toList();
     if (warehouses.isEmpty) {
-      return const Padding(
-          padding: EdgeInsets.only(bottom: 8),
-          child: Text('Sem estoque disponível.'));
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text('Sem estoque disponível em nenhum depósito.',
+            style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
+      );
     }
     return Column(
       children: warehouses.map((wh) {
         return Card(
+          elevation: 0,
+          margin: const EdgeInsets.only(bottom: 8),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: BorderSide(color: Colors.grey.shade200),
+          ),
           child: ListTile(
-            leading: const Icon(Icons.warehouse),
-            title:    Text("Depósito ${wh['WarehouseCode']}"),
-            subtitle: Text("Disponível: ${wh['InStock']}"),
+            leading: CircleAvatar(
+              backgroundColor: Colors.blue.shade50,
+              child: Icon(Icons.warehouse_rounded,
+                  color: Colors.blue.shade700, size: 20),
+            ),
+            title: Text('Depósito ${wh['WarehouseCode']}',
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: Text(
+              'Disponível: ${wh['InStock']}  •  '
+              'Comprometido: ${wh['Committed'] ?? 0}  •  '
+              'Pedido: ${wh['Ordered'] ?? 0}',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
             trailing: IconButton(
-              icon: const Icon(Icons.print),
-              tooltip: 'Imprimir etiqueta para este depósito',
+              icon: const Icon(Icons.print_rounded),
+              tooltip: 'Imprimir etiqueta',
               onPressed: () {
                 HapticFeedback.lightImpact();
                 Navigator.push(
@@ -731,19 +992,73 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
 
   Widget _buildSectionTitle(String title) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16),
+      padding: const EdgeInsets.only(top: 20, bottom: 8),
       child: Text(title,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
     );
   }
 
-  Widget _buildDetailRow(String label, String value, {bool isAlert = false}) {
+  /// Card com divisória entre linhas — campos nulos são automaticamente ocultos
+  Widget _buildInfoCard(List<Widget> rows) {
+    // Filtra widgets vazios (SizedBox.shrink gerados por campos nulos)
+    final visible =
+        rows.where((w) => w is! SizedBox).toList();
+    if (visible.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text('Sem informações disponíveis.',
+            style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
+      );
+    }
+    return Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        children: [
+          for (int i = 0; i < visible.length; i++) ...[
+            visible[i],
+            if (i < visible.length - 1)
+              Divider(
+                  height: 1,
+                  indent: 16,
+                  endIndent: 16,
+                  color: Colors.grey.shade100),
+          ],
+        ],
+      ),
+    );
+  }
+
+
+  /// Linha de detalhe. Retorna SizedBox.shrink() se value for null/vazio
+  /// para que _buildInfoCard possa filtrá-la.
+  Widget _buildDetailRow(
+    String label,
+    String? value, {
+    bool isAlert  = false,
+    bool destaque = false,
+  }) {
+    if (value == null || value.isEmpty) return const SizedBox.shrink();
     return ListTile(
-      title: Text(label),
-      trailing: Text(value,
-          style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: isAlert ? Colors.red : Colors.black)),
+      dense: true,
+      title: Text(label,
+          style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+      trailing: Text(
+        value,
+        style: TextStyle(
+          fontSize: destaque ? 16 : 13,
+          fontWeight: destaque ? FontWeight.bold : FontWeight.w600,
+          color: isAlert
+              ? Colors.red
+              : destaque
+                  ? Theme.of(context).primaryColor
+                  : Colors.black87,
+        ),
+      ),
     );
   }
 }

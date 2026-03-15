@@ -139,13 +139,19 @@ class _HomePageState extends State<HomePage> {
   _ErroSap _interpretarErroSap(String mensagemBruta) {
     final msg = mensagemBruta.toUpperCase();
 
-    String itemEncontrado    = '';
+    // Sempre trunca para exibir no detalhe técnico
+    final tecnico = mensagemBruta.length > 300
+        ? '${mensagemBruta.substring(0, 300)}...'
+        : mensagemBruta;
+
+    // Tenta identificar qual item da lista causou o erro
+    String itemEncontrado     = '';
     String depositoEncontrado = '';
     for (var c in _contagensOffline) {
       final codigo   = c['itemCode'].toString().trim().toUpperCase();
       final deposito = c['warehouseCode']?.toString().trim() ?? '';
       if (msg.contains(codigo)) {
-        itemEncontrado    = c['itemCode'].toString().trim();
+        itemEncontrado     = c['itemCode'].toString().trim();
         depositoEncontrado = deposito;
         break;
       }
@@ -163,52 +169,12 @@ class _HomePageState extends State<HomePage> {
             ? 'O item "$itemEncontrado" já possui uma contagem de inventário aberta e não finalizada no SAP Business One.'
             : 'Um dos itens já possui uma contagem de inventário aberta e não finalizada no SAP.',
         orientacao:
-            'Para resolver: acesse o SAP Business One → Estoque → Contagem de Estoque e finalize ou cancele a contagem existente antes de sincronizar novamente.',
+            'Acesse o SAP Business One → Estoque → Contagem de Estoque, finalize ou cancele a contagem existente e sincronize novamente.',
+        codigoTecnico: tecnico,
       );
     }
 
-    // ── Item não encontrado — VERIFICADO ANTES do depósito ──────────────────
-    // O SAP pode retornar mensagens com "WAREHOUSE" mesmo quando o problema
-    // real é o código do item inexistente no cadastro. Verificar item primeiro
-    // evita classificar errado e confundir o operador.
-    if (msg.contains('-4002') ||
-        msg.contains('ITEM NOT FOUND') ||
-        msg.contains('INVALID ITEM') ||
-        msg.contains('ITEM CODE') ||
-        (msg.contains('ITEM') && msg.contains('NOT FOUND')) ||
-        (msg.contains('ITEM') && msg.contains('DOES NOT EXIST')) ||
-        (msg.contains('ITEM') && msg.contains('INVALID'))) {
-      return _ErroSap(
-        icone: Icons.inventory_2_rounded,
-        cor: Colors.orange.shade700,
-        titulo: 'Item não encontrado no SAP',
-        mensagem: itemEncontrado.isNotEmpty
-            ? 'O item "$itemEncontrado" não foi encontrado no cadastro do SAP Business One. Verifique se o código está correto.'
-            : 'Um dos itens da contagem não existe no cadastro do SAP Business One.',
-        orientacao:
-            'Confirme o código do item diretamente no SAP Business One → Estoque → Dados do Item, e corrija a contagem antes de sincronizar novamente.',
-      );
-    }
-
-    // ── Depósito inválido ────────────────────────────────────────────────────
-    if (msg.contains('-5002') ||
-        msg.contains('WAREHOUSE NOT FOUND') ||
-        msg.contains('INVALID WAREHOUSE') ||
-        (msg.contains('WAREHOUSE') && msg.contains('NOT FOUND')) ||
-        (msg.contains('WAREHOUSE') && msg.contains('INVALID')) ||
-        (msg.contains('WAREHOUSECODE') && msg.contains('NOT FOUND'))) {
-      return _ErroSap(
-        icone: Icons.warehouse_rounded,
-        cor: Colors.orange.shade700,
-        titulo: 'Depósito inválido',
-        mensagem: depositoEncontrado.isNotEmpty
-            ? 'O depósito "$depositoEncontrado" não foi encontrado no SAP Business One.'
-            : 'Um dos depósitos informados não existe no SAP Business One.',
-        orientacao:
-            'Verifique o código do depósito nas Configurações da API ou edite as contagens com o código correto.',
-      );
-    }
-
+    // ── Sessão expirada ──────────────────────────────────────────────────────
     if (msg.contains('SESSION') ||
         msg.contains('401') ||
         msg.contains('UNAUTHORIZED')) {
@@ -219,9 +185,11 @@ class _HomePageState extends State<HomePage> {
         mensagem: 'Sua sessão no SAP Business One expirou.',
         orientacao:
             'Faça login novamente para continuar. Seus dados de contagem estão salvos.',
+        codigoTecnico: tecnico,
       );
     }
 
+    // ── Falha de conexão ─────────────────────────────────────────────────────
     if (msg.contains('TIMEOUT') ||
         msg.contains('CONNECTION') ||
         msg.contains('SOCKET')) {
@@ -235,24 +203,80 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
+    // ── Classificação por conteúdo ───────────────────────────────────────────
+    // Estratégia: pontuar qual erro é mais provável pelo conteúdo da mensagem.
+    // Isso evita que "WAREHOUSE" dentro de uma mensagem de item cause
+    // classificação errada — o erro com mais pontos vence.
+
+    int pontoItem      = 0;
+    int pontoDeposito  = 0;
+
+    // Sinais fortes de item inexistente
+    if (msg.contains('-4002'))                             pontoItem += 10;
+    if (msg.contains('ITEM NOT FOUND'))                    pontoItem += 8;
+    if (msg.contains('INVALID ITEM'))                      pontoItem += 8;
+    if (msg.contains('ITEM') && msg.contains('NOT EXIST')) pontoItem += 7;
+    if (msg.contains('ITEM') && msg.contains('NOT FOUND')) pontoItem += 6;
+    if (msg.contains('ITEM') && msg.contains('INVALID'))   pontoItem += 5;
+    if (msg.contains('ITEM CODE'))                         pontoItem += 4;
+    if (msg.contains('ITEM') && msg.contains('UNKNOWN'))   pontoItem += 4;
+    // Se o código do item da contagem aparece na mensagem de erro, é item
+    if (itemEncontrado.isNotEmpty)                         pontoItem += 3;
+
+    // Sinais fortes de depósito inválido
+    if (msg.contains('-5002'))                                         pontoDeposito += 10;
+    if (msg.contains('WAREHOUSE NOT FOUND'))                           pontoDeposito += 8;
+    if (msg.contains('INVALID WAREHOUSE'))                             pontoDeposito += 8;
+    if (msg.contains('WAREHOUSE') && msg.contains('NOT FOUND'))        pontoDeposito += 6;
+    if (msg.contains('WAREHOUSE') && msg.contains('INVALID'))          pontoDeposito += 5;
+    if (msg.contains('WAREHOUSECODE') && msg.contains('NOT FOUND'))    pontoDeposito += 6;
+    // WAREHOUSE sozinho, sem NOT FOUND/INVALID, é sinal fraco
+    if (msg.contains('WAREHOUSE') && pontoDeposito == 0)               pontoDeposito += 1;
+
+    if (pontoItem > pontoDeposito && pontoItem > 0) {
+      return _ErroSap(
+        icone: Icons.inventory_2_rounded,
+        cor: Colors.orange.shade700,
+        titulo: 'Item não encontrado no SAP',
+        mensagem: itemEncontrado.isNotEmpty
+            ? 'O item "$itemEncontrado" não existe no cadastro do SAP Business One. O código digitado pode estar incorreto.'
+            : 'Um dos itens da contagem não existe no cadastro do SAP Business One.',
+        orientacao:
+            'Corrija o código do item na tela de contagem e sincronize novamente. Para confirmar, busque o item em SAP Business One → Estoque → Dados do Item.',
+        codigoTecnico: tecnico,
+      );
+    }
+
+    if (pontoDeposito > pontoItem && pontoDeposito > 1) {
+      return _ErroSap(
+        icone: Icons.warning_amber_rounded,
+        cor: Colors.orange.shade700,
+        titulo: 'Erro ao enviar contagem',
+        mensagem: depositoEncontrado.isNotEmpty
+            ? 'O SAP recusou o item "$depositoEncontrado". Confirme se o código do item foi digitado corretamente e se o depósito está configurado certo.'
+            : 'O SAP recusou um ou mais itens da contagem. Confirme se os códigos dos itens foram digitados corretamente e se o depósito está configurado certo.',
+        orientacao:
+            'Verifique o retorno do SAP abaixo para identificar a causa exata. Corrija o problema e sincronize novamente.',
+        codigoTecnico: tecnico,
+      );
+    }
+
+    // ── Fallback genérico ────────────────────────────────────────────────────
     return _ErroSap(
       icone: Icons.error_outline_rounded,
       cor: Colors.red.shade700,
       titulo: 'Erro na sincronização',
       mensagem: itemEncontrado.isNotEmpty
-          ? 'Ocorreu um erro ao processar o item "$itemEncontrado".'
-          : 'Ocorreu um erro ao enviar os dados para o SAP Business One.',
+          ? 'Ocorreu um erro ao processar o item "$itemEncontrado". Veja o detalhe técnico abaixo.'
+          : 'Ocorreu um erro ao enviar os dados para o SAP Business One. Veja o detalhe técnico abaixo.',
       orientacao:
-          'Tente sincronizar novamente. Se o erro persistir, entre em contato com o administrador do sistema.',
-      codigoTecnico: mensagemBruta.length > 200
-          ? '${mensagemBruta.substring(0, 200)}...'
-          : mensagemBruta,
+          'Anote a mensagem de erro abaixo e entre em contato com o administrador do SAP caso o problema persista.',
+      codigoTecnico: tecnico,
     );
   }
 
   void _exibirErroSap(String mensagemBruta) {
     final erro = _interpretarErroSap(mensagemBruta);
-    bool mostrarDetalhe = false;
 
     showDialog(
       context: context,
@@ -313,44 +337,31 @@ class _HomePageState extends State<HomePage> {
                 ),
                 if (erro.codigoTecnico != null) ...[
                   const SizedBox(height: 12),
-                  GestureDetector(
-                    onTap: () => setDialogState(
-                        () => mostrarDetalhe = !mostrarDetalhe),
-                    child: Row(children: [
-                      Icon(
-                          mostrarDetalhe
-                              ? Icons.expand_less_rounded
-                              : Icons.expand_more_rounded,
-                          size: 18, color: Colors.grey.shade500),
-                      const SizedBox(width: 4),
-                      Text(
-                          mostrarDetalhe
-                              ? 'Ocultar detalhe técnico'
-                              : 'Ver detalhe técnico',
-                          style: TextStyle(
-                              fontSize: 12, color: Colors.grey.shade500)),
-                    ]),
-                  ),
-                  if (mostrarDetalhe) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade100,
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: Colors.grey.shade300),
-                      ),
-                      child: Text(
-                        erro.codigoTecnico!,
-                        style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 10,
-                            color: Colors.blueGrey.shade600,
-                            height: 1.4),
-                      ),
+                  // Detalhe técnico sempre visível — ajuda a diagnosticar
+                  // erros que a classificação automática pode errar
+                  Text('Retorno do SAP:',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey.shade600)),
+                  const SizedBox(height: 4),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.grey.shade300),
                     ),
-                  ],
+                    child: SelectableText(
+                      erro.codigoTecnico!,
+                      style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 10,
+                          color: Colors.blueGrey.shade700,
+                          height: 1.5),
+                    ),
+                  ),
                 ],
               ],
             ),
