@@ -218,7 +218,19 @@ class SapService {
       client = await _getClient();
       final cleanCode = itemCode.trim().toUpperCase().replaceAll("'", "''");
       
-      const fields = "ItemCode,ItemName,InventoryUOM,InventoryItem,SalesItem,PurchaseItem,Frozen,ItemWarehouseInfoCollection";
+      // Campos confirmados com JSON real do SAP B1
+      const fields =
+          'ItemCode,ItemName,ForeignName,InventoryUOM,'
+          'InventoryItem,SalesItem,PurchaseItem,Frozen,'
+          'BarCode,SWW,ItemsGroupCode,NCMCode,'
+          'MinInventory,MaxInventory,MinOrderQuantity,'
+          'ManageBatchNumbers,ManageSerialNumbers,'
+          'SalesUnitWeight,SalesUnitHeight,SalesUnitWidth,SalesUnitLength,'
+          'SalesUnit,SalesPackagingUnit,'
+          'AvgStdPrice,MovingAveragePrice,'
+          'QuantityOnStock,QuantityOrderedFromVendors,QuantityOrderedByCustomers,'
+          'Mainsupplier,Manufacturer,'
+          'ItemWarehouseInfoCollection,ItemPreferredVendors,ItemPrices';
       final url = "${_prepareUrl(baseUrl)}Items('$cleanCode')?\$select=$fields";
       
       final cookieHeader = "B1SESSION=$session${routeId != null ? '; ROUTEID=$routeId' : ''}";
