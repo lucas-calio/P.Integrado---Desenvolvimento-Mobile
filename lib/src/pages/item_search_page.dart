@@ -1,15 +1,20 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:vibration/vibration.dart';
-import 'dart:async';
 
 import '../services/sap_service.dart';
 import '../services/ocr_service.dart';
 import '../widgets/widgets.dart';
 import 'etiqueta_page.dart';
 
+/// Tela de consulta de itens no SAP Business One.
+///
+/// Permite busca por código ou nome, exibe detalhes completos do item
+/// e gerencia uma fila de impressão de etiquetas.
 class ItemSearchPage extends StatefulWidget {
   const ItemSearchPage({super.key});
 
@@ -19,23 +24,22 @@ class ItemSearchPage extends StatefulWidget {
 
 class _ItemSearchPageState extends State<ItemSearchPage> {
   final _searchController = TextEditingController();
-  final AudioPlayer _audio = AudioPlayer();
+  final _audio            = AudioPlayer();
 
-  Timer? _debounceTimer;
-  Map<String, dynamic>? _itemData;
-  List<dynamic> _searchResults = [];
-
-  bool _loading            = false;
-  bool _scannerProcessando = false;
+  Timer?                 _debounceTimer;
+  Map<String, dynamic>?  _itemData;
+  List<dynamic>          _resultados   = [];
+  bool                   _carregando   = false;
+  bool                   _scannerAtivo = false;
 
   // ── Carrinho de impressão ─────────────────────────────────────────────────
+
   final Map<String, Map<String, dynamic>> _carrinho = {};
 
   void _adicionarAoCarrinho(Map<String, dynamic> item) {
     final code = item['ItemCode'] as String;
     HapticFeedback.mediumImpact();
     setState(() => _carrinho[code] = Map<String, dynamic>.from(item));
-    // ignore: use_build_context_synchronously
     StoxSnackbar.sucesso(context, '$code adicionado à fila de impressão.');
   }
 
@@ -68,25 +72,26 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => _CarrinhoSheet(
-        carrinho: _carrinho,
+      builder: (sheetCtx) => _CarrinhoSheet(
+        carrinho:     _carrinho,
         primaryColor: Theme.of(context).primaryColor,
         onRemover: (code) => setState(() => _carrinho.remove(code)),
         onLimpar:  ()     => setState(() => _carrinho.clear()),
         onImprimir: () {
-          Navigator.pop(ctx);
+          Navigator.pop(sheetCtx);
           _irParaImpressao();
         },
       ),
     );
   }
 
-  // ─── FEEDBACK ────────────────────────────────────────────────────────────
+  // ── Feedback ─────────────────────────────────────────────────────────────
 
   Future<void> _play(String asset,
       {bool isError = false, bool isFail = false}) async {
     try {
-      if (await Vibration.hasVibrator()) {
+      final temVibrador = await Vibration.hasVibrator();
+      if (temVibrador) {
         if (isFail) {
           Vibration.vibrate(pattern: [0, 400, 100, 400]);
         } else if (isError) {
@@ -95,19 +100,17 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
           Vibration.vibrate(duration: 100);
         }
       } else {
-        if (isFail || isError) {
-          HapticFeedback.vibrate();
-        } else {
-          HapticFeedback.lightImpact();
-        }
+        (isFail || isError)
+            ? HapticFeedback.vibrate()
+            : HapticFeedback.lightImpact();
       }
       await _audio.play(AssetSource(asset));
     } catch (e) {
-      debugPrint('Feedback error: $e');
+      debugPrint('ItemSearchPage._play: $e');
     }
   }
 
-  // ─── BUSCA ────────────────────────────────────────────────────────────────
+  // ── Busca ─────────────────────────────────────────────────────────────────
 
   Future<void> _buscar({bool autoSearch = false}) async {
     final termo = _searchController.text.trim();
@@ -124,65 +127,64 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
     if (!sessaoAtiva) {
       if (!autoSearch && mounted) {
         await _play('sounds/error_beep.mp3', isError: true);
-        // ignore: use_build_context_synchronously
-        StoxSnackbar.erro(context,
-            'Sessão SAP não encontrada. Faça login antes de pesquisar.');
+        StoxSnackbar.erro(
+            // ignore: use_build_context_synchronously
+            context, 'Sessão SAP não encontrada. Faça login antes de pesquisar.');
       }
       return;
     }
 
     setState(() {
-      _loading       = true;
-      _itemData      = null;
-      _searchResults = [];
+      _carregando = true;
+      _itemData   = null;
+      _resultados = [];
     });
+
     try {
       final results = await SapService.searchItems(termo);
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          if (results.length == 1) {
-            FocusScope.of(context).unfocus();
-            _carregarDetalhes(results.first['ItemCode']);
-          } else {
-            _searchResults = results;
-            if (results.isNotEmpty && !autoSearch) {
-              HapticFeedback.selectionClick();
-            }
-          }
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _carregando = false;
+        if (results.length == 1) {
+          FocusScope.of(context).unfocus();
+          _carregarDetalhes(results.first['ItemCode']);
+        } else {
+          _resultados = results;
+          if (results.isNotEmpty && !autoSearch) HapticFeedback.selectionClick();
+        }
+      });
       if (results.isEmpty && !autoSearch) {
         await _play('sounds/error_beep.mp3', isError: true);
-        // ignore: use_build_context_synchronously
+        if (!mounted) return;
         StoxSnackbar.aviso(context, "Nenhum item encontrado para '$termo'.");
       }
     } catch (e) {
-      if (mounted) setState(() => _loading = false);
+      if (!mounted) return;
+      setState(() => _carregando = false);
       if (!autoSearch) {
         await _play('sounds/fail.mp3', isFail: true);
-        // ignore: use_build_context_synchronously
+        if (!mounted) return;
         StoxSnackbar.erro(context, 'Erro na busca: $e');
       }
     }
   }
 
   Future<void> _carregarDetalhes(String itemCode) async {
-    setState(() => _loading = true);
+    setState(() => _carregando = true);
     try {
       final data = await SapService.getDetailedItem(itemCode);
-      if (mounted) {
-        setState(() {
-          _itemData      = data;
-          _searchResults = [];
-          _loading       = false;
-        });
-        await _play('sounds/beep.mp3');
-      }
+      if (!mounted) return;
+      setState(() {
+        _itemData   = data;
+        _resultados = [];
+        _carregando = false;
+      });
+      await _play('sounds/beep.mp3');
     } catch (e) {
-      if (mounted) setState(() => _loading = false);
+      if (!mounted) return;
+      setState(() => _carregando = false);
       await _play('sounds/fail.mp3', isFail: true);
-      // ignore: use_build_context_synchronously
+      if (!mounted) return;
       StoxSnackbar.erro(context, 'Erro ao carregar detalhes do item.');
     }
   }
@@ -190,15 +192,14 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
   Future<void> _escanearTextoIA() async {
     HapticFeedback.mediumImpact();
     final resultado = await OcrService.lerAnotacaoDaCamera();
-    if (resultado != null &&
-        resultado['itemCode'] != null &&
-        resultado['itemCode']!.isNotEmpty) {
+    if (!mounted) return;
+    if (resultado != null && resultado['itemCode']!.isNotEmpty) {
       setState(() => _searchController.text = resultado['itemCode']!);
       await _play('sounds/beep.mp3');
       _buscar();
     } else {
       await _play('sounds/error_beep.mp3', isError: true);
-      // ignore: use_build_context_synchronously
+      if (!mounted) return;
       StoxSnackbar.aviso(context, 'Nenhum código reconhecido pela câmera.');
     }
   }
@@ -206,113 +207,121 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
   void _abrirScanner() {
     HapticFeedback.lightImpact();
     FocusScope.of(context).unfocus();
-    _scannerProcessando = false;
+    _scannerAtivo = false;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) =>
-          LayoutBuilder(builder: (context, constraints) {
-        final scanWindow = Rect.fromCenter(
-          center: Offset(constraints.maxWidth / 2, 200),
-          width: 280, height: 180,
-        );
-        return Container(
-          height: MediaQuery.of(context).size.height * 0.85,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: SafeArea(
-            child: Column(children: [
-              const SizedBox(height: 12),
-              Container(
-                width: 48, height: 6,
-                decoration: BoxDecoration(
-                    color: Colors.grey.shade300,
-                    borderRadius: BorderRadius.circular(10)),
-              ),
-              AppBar(
-                title: const Text('Escanear Código',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
-                centerTitle: true,
-                backgroundColor: Colors.transparent,
-                foregroundColor: Colors.black87,
-                elevation: 0,
-                automaticallyImplyLeading: false,
-                actions: [
-                  IconButton(
-                    icon: const Icon(Icons.close_rounded),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-              Expanded(
-                child: Stack(children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: MobileScanner(
-                      scanWindow: scanWindow,
-                      onDetect: (capture) async {
-                        if (_scannerProcessando) return;
-                        final barcodes = capture.barcodes;
-                        if (barcodes.isNotEmpty) {
+      builder: (sheetCtx) => LayoutBuilder(
+        builder: (sheetCtx, constraints) {
+          final scanWindow = Rect.fromCenter(
+            center: Offset(constraints.maxWidth / 2, 200),
+            width: 280,
+            height: 180,
+          );
+          return Container(
+            height: MediaQuery.of(sheetCtx).size.height * 0.85,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            child: SafeArea(
+              child: Column(children: [
+                const SizedBox(height: 12),
+                Container(
+                  width: 48,
+                  height: 6,
+                  decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                AppBar(
+                  title: const Text('Escanear Código',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  centerTitle: true,
+                  backgroundColor: Colors.transparent,
+                  foregroundColor: Colors.black87,
+                  elevation: 0,
+                  automaticallyImplyLeading: false,
+                  actions: [
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () => Navigator.pop(sheetCtx),
+                    ),
+                  ],
+                ),
+                Expanded(
+                  child: Stack(children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: MobileScanner(
+                        scanWindow: scanWindow,
+                        onDetect: (capture) async {
+                          if (_scannerAtivo) return;
+                          final barcodes = capture.barcodes;
+                          if (barcodes.isEmpty) return;
                           final code = barcodes.first.rawValue ?? '';
                           if (code.isEmpty) return;
-                          _scannerProcessando = true;
+                          _scannerAtivo = true;
                           await _play('sounds/beep.mp3');
                           if (!mounted) return;
                           _searchController.text = code;
                           // ignore: use_build_context_synchronously
-                          Navigator.of(context).pop();
+                          Navigator.of(sheetCtx).pop();
                           _buscar();
-                        }
-                      },
+                        },
+                      ),
                     ),
-                  ),
-                  ColorFiltered(
-                    colorFilter: ColorFilter.mode(
-                        Colors.black.withAlpha(179), BlendMode.srcOut),
-                    child: Stack(children: [
-                      Container(
-                          decoration: const BoxDecoration(
-                              color: Colors.black,
-                              backgroundBlendMode: BlendMode.dstOut)),
-                      Center(
-                        child: Container(
-                          width: scanWindow.width, height: scanWindow.height,
-                          decoration: BoxDecoration(
-                              color: Colors.red,
-                              borderRadius: BorderRadius.circular(16)),
+                    ColorFiltered(
+                      colorFilter: ColorFilter.mode(
+                          Colors.black.withAlpha(179), BlendMode.srcOut),
+                      child: Stack(children: [
+                        Container(
+                            decoration: const BoxDecoration(
+                                color: Colors.black,
+                                backgroundBlendMode: BlendMode.dstOut)),
+                        Center(
+                          child: Container(
+                            width: scanWindow.width,
+                            height: scanWindow.height,
+                            decoration: BoxDecoration(
+                                color: Colors.red,
+                                borderRadius: BorderRadius.circular(16)),
+                          ),
+                        ),
+                      ]),
+                    ),
+                    Center(
+                      child: Container(
+                        width: scanWindow.width,
+                        height: scanWindow.height,
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                              color: Theme.of(sheetCtx).primaryColor,
+                              width: 3),
+                          borderRadius: BorderRadius.circular(16),
                         ),
                       ),
-                    ]),
-                  ),
-                  Center(
-                    child: Container(
-                      width: scanWindow.width, height: scanWindow.height,
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                            color: Theme.of(context).primaryColor, width: 3),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
                     ),
+                  ]),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Text(
+                    'Alinhe o código de barras dentro do quadro',
+                    style: TextStyle(color: Colors.grey.shade600),
                   ),
-                ]),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 24),
-                child: Text('Alinhe o código de barras dentro do quadro'),
-              ),
-            ]),
-          ),
-        );
-      }),
+                ),
+              ]),
+            ),
+          );
+        },
+      ),
     );
   }
 
-  // ─── BUILD ────────────────────────────────────────────────────────────────
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -320,7 +329,6 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
       appBar: AppBar(
         title: const Text('Consultar Item'),
         actions: [
-          // Badge com contador do carrinho
           StoxBadge(
             count: _carrinho.length,
             child: IconButton(
@@ -333,12 +341,11 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
       ),
       body: SafeArea(
         child: Column(children: [
-          // Barra de busca com IA e scanner
           StoxSearchBar(
             controller: _searchController,
-            onSearch: _buscar,
-            onIA: _escanearTextoIA,
-            onScanner: _abrirScanner,
+            onSearch:   _buscar,
+            onIA:       _escanearTextoIA,
+            onScanner:  _abrirScanner,
             onChanged: (value) {
               if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
               _debounceTimer = Timer(const Duration(milliseconds: 600), () {
@@ -346,13 +353,13 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
               });
             },
           ),
-          if (_loading)
-            const Expanded(
-                child: Center(child: CircularProgressIndicator())),
-          if (!_loading && _searchResults.isNotEmpty)
-            _buildSearchSuggestions(),
-          if (!_loading && _itemData != null) _buildResultList(),
-          if (!_loading && _itemData == null && _searchResults.isEmpty)
+          if (_carregando)
+            const Expanded(child: Center(child: CircularProgressIndicator())),
+          if (!_carregando && _resultados.isNotEmpty)
+            _buildSugestoesBusca(),
+          if (!_carregando && _itemData != null)
+            _buildDetalheItem(),
+          if (!_carregando && _itemData == null && _resultados.isEmpty)
             Expanded(
               child: Center(
                 child: Column(
@@ -372,15 +379,17 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
     );
   }
 
-  Widget _buildSearchSuggestions() {
+  // ── Subwidgets ────────────────────────────────────────────────────────────
+
+  Widget _buildSugestoesBusca() {
     final theme = Theme.of(context);
     return Expanded(
       child: ListView.separated(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
-        itemCount: _searchResults.length,
+        itemCount: _resultados.length,
         separatorBuilder: (_, _) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
-          final item       = _searchResults[index] as Map<String, dynamic>;
+          final item       = _resultados[index] as Map<String, dynamic>;
           final code       = item['ItemCode'] as String;
           final noCarrinho = _estaNoCarrinho(code);
 
@@ -412,9 +421,7 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
                             ? Colors.red.shade400
                             : theme.primaryColor,
                       ),
-                      tooltip: noCarrinho
-                          ? 'Remover da fila'
-                          : 'Adicionar à fila de impressão',
+                      tooltip: noCarrinho ? 'Remover da fila' : 'Adicionar à fila',
                       onPressed: () => noCarrinho
                           ? _removerDoCarrinho(code)
                           : _adicionarAoCarrinho(item),
@@ -432,46 +439,38 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
     );
   }
 
-  // ─── DETALHE DO ITEM ──────────────────────────────────────────────────────
-
-  Widget _buildResultList() {
+  Widget _buildDetalheItem() {
     final noCarrinho = _estaNoCarrinho(_itemData!['ItemCode'] ?? '');
     final qtd    = num.tryParse(_itemData!['QuantityOnStock']?.toString() ?? '0') ?? 0;
-    final minimo = num.tryParse(_itemData!['MinInventory']?.toString()  ?? '0') ?? 0;
-    final maximo = num.tryParse(_itemData!['MaxInventory']?.toString()  ?? '0') ?? 0;
+    final minimo = num.tryParse(_itemData!['MinInventory']?.toString()   ?? '0') ?? 0;
+    final maximo = num.tryParse(_itemData!['MaxInventory']?.toString()   ?? '0') ?? 0;
 
     return Expanded(
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Header com quantidade e barra de estoque
           StoxItemHeaderCard(
-            itemCode:             _itemData!['ItemCode'] ?? '',
-            itemName:             _itemData!['ItemName'] ?? '',
-            quantidadeEmEstoque:  qtd,
-            estoqueMinimo:        minimo,
-            estoqueMaximo:        maximo,
-            unidadeMedida:        _itemData!['InventoryUOM']?.toString() ?? '',
+            itemCode:            _itemData!['ItemCode'] ?? '',
+            itemName:            _itemData!['ItemName'] ?? '',
+            quantidadeEmEstoque: qtd,
+            estoqueMinimo:       minimo,
+            estoqueMaximo:       maximo,
+            unidadeMedida:       _itemData!['InventoryUOM']?.toString() ?? '',
           ),
-
           const SizedBox(height: 12),
-
-          // Botão adicionar / remover do carrinho
           noCarrinho
               ? StoxDestructiveButton(
-                  label: 'REMOVER DA FILA DE IMPRESSÃO',
-                  icon: Icons.remove_circle_outline,
+                  label:     'REMOVER DA FILA DE IMPRESSÃO',
+                  icon:      Icons.remove_circle_outline,
                   onPressed: () => _removerDoCarrinho(_itemData!['ItemCode']),
-                  height: 48,
+                  height:    48,
                 )
               : StoxButton(
-                  label: 'ADICIONAR À FILA DE IMPRESSÃO',
-                  icon: Icons.add_to_queue_rounded,
+                  label:     'ADICIONAR À FILA DE IMPRESSÃO',
+                  icon:      Icons.add_to_queue_rounded,
                   onPressed: () => _adicionarAoCarrinho(_itemData!),
-                  height: 48,
+                  height:    48,
                 ),
-
-          // Chips de status
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Wrap(
@@ -486,31 +485,24 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
               ],
             ),
           ),
-
-          // Estoque por depósito
-          _buildWarehouseInfo(),
-
-          // Identificação
+          _buildInfoDepositos(),
           StoxSectionCard(
             titulo: 'Identificação',
             linhas: [
               StoxDetailRow('Unidade de Medida', _itemData!['InventoryUOM']?.toString()),
-              StoxDetailRow('Embalagem', _itemData!['SalesPackagingUnit']?.toString()),
+              StoxDetailRow('Embalagem',          _itemData!['SalesPackagingUnit']?.toString()),
               StoxDetailRow('Código de Barras (EAN)', _itemData!['BarCode']?.toString()),
               StoxDetailRow('Código Adicional (SWW)', _itemData!['SWW']?.toString()),
-              StoxDetailRow('Nome Estrangeiro', _itemData!['ForeignName']?.toString()),
-              StoxDetailRow('Grupo (código)', _itemData!['ItemsGroupCode']?.toString()),
-              StoxDetailRow('NCM', _itemData!['NCMCode']?.toString()),
+              StoxDetailRow('Nome Estrangeiro',   _itemData!['ForeignName']?.toString()),
+              StoxDetailRow('Grupo (código)',      _itemData!['ItemsGroupCode']?.toString()),
+              StoxDetailRow('NCM',                 _itemData!['NCMCode']?.toString()),
             ],
           ),
-
-          // Controle de estoque
           StoxSectionCard(
             titulo: 'Controle de Estoque',
             linhas: [
               StoxDetailRow('Estoque Total',
-                  _formatNum(_itemData!['QuantityOnStock']),
-                  destaque: true),
+                  _formatNum(_itemData!['QuantityOnStock']), destaque: true),
               StoxDetailRow('Pedidos de Clientes',
                   _formatNum(_itemData!['QuantityOrderedByCustomers'])),
               StoxDetailRow('Pedidos a Fornecedores',
@@ -527,8 +519,6 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
                   _itemData!['ManageSerialNumbers'] == 'tYES' ? 'Sim' : 'Não'),
             ],
           ),
-
-          // Fornecimento e preços
           StoxSectionCard(
             titulo: 'Fornecimento e Preços',
             linhas: [
@@ -543,8 +533,6 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
               StoxDetailRow('Preço Lista 1', _formatPrecoLista(1)),
             ],
           ),
-
-          // Dimensões e peso
           StoxSectionCard(
             titulo: 'Dimensões e Peso',
             linhas: [
@@ -558,8 +546,6 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
                   _formatMedida(_itemData!['SalesUnitLength'], 'm')),
             ],
           ),
-
-          // Status
           StoxSectionCard(
             titulo: 'Status',
             linhas: [
@@ -570,20 +556,76 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
               ),
             ],
           ),
-
           const SizedBox(height: 80),
         ],
       ),
     );
   }
 
-  // ─── FORMATAÇÃO ───────────────────────────────────────────────────────────
+  Widget _buildInfoDepositos() {
+    final lista      = _itemData!['ItemWarehouseInfoCollection'] as List? ?? [];
+    final depositos  = lista.where((wh) => (wh['InStock'] ?? 0) > 0).toList();
+
+    if (depositos.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text('Sem estoque disponível em nenhum depósito.',
+            style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.only(top: 20, bottom: 8),
+          child: Text('Estoque por Depósito',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        ),
+        ...depositos.map((wh) => StoxCard(
+              child: ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: Colors.blue.shade50,
+                  child: Icon(Icons.warehouse_rounded,
+                      color: Colors.blue.shade700, size: 20),
+                ),
+                title: Text('Depósito ${wh['WarehouseCode']}',
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text(
+                  'Disponível: ${wh['InStock']}  •  '
+                  'Comprometido: ${wh['Committed'] ?? 0}  •  '
+                  'Pedido: ${wh['Ordered'] ?? 0}',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+                trailing: IconButton(
+                  icon: const Icon(Icons.print_rounded),
+                  tooltip: 'Imprimir etiqueta deste depósito',
+                  onPressed: () {
+                    HapticFeedback.lightImpact();
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => EtiquetaPage(
+                          itemData: _itemData!,
+                          deposito: wh['WarehouseCode'].toString(),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            )),
+      ],
+    );
+  }
+
+  // ── Formatação ────────────────────────────────────────────────────────────
 
   String? _formatPrecoLista(int lista) {
     final prices = _itemData!['ItemPrices'] as List? ?? [];
     try {
-      final entry = prices.firstWhere(
-          (p) => p['PriceList'] == lista && (p['Price'] ?? 0) > 0);
+      final entry = prices
+          .firstWhere((p) => p['PriceList'] == lista && (p['Price'] ?? 0) > 0);
       return _formatPreco(entry['Price']);
     } catch (_) {
       return null;
@@ -611,66 +653,6 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
     return '${n.toStringAsFixed(3)} $unidade';
   }
 
-  // ─── DEPÓSITOS ────────────────────────────────────────────────────────────
-
-  Widget _buildWarehouseInfo() {
-    final list       = (_itemData!['ItemWarehouseInfoCollection'] as List? ?? []);
-    final warehouses = list.where((wh) => (wh['InStock'] ?? 0) > 0).toList();
-
-    if (warehouses.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Text('Sem estoque disponível em nenhum depósito.',
-            style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 20, bottom: 8),
-          child: const Text('Estoque por Depósito',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-        ),
-        ...warehouses.map((wh) => StoxCard(
-              child: ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: Colors.blue.shade50,
-                  child: Icon(Icons.warehouse_rounded,
-                      color: Colors.blue.shade700, size: 20),
-                ),
-                title: Text('Depósito ${wh['WarehouseCode']}',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text(
-                  'Disponível: ${wh['InStock']}  •  '
-                  'Comprometido: ${wh['Committed'] ?? 0}  •  '
-                  'Pedido: ${wh['Ordered'] ?? 0}',
-                  style:
-                      TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.print_rounded),
-                  tooltip: 'Imprimir etiqueta deste depósito',
-                  onPressed: () {
-                    HapticFeedback.lightImpact();
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => EtiquetaPage(
-                          itemData: _itemData!,
-                          deposito: wh['WarehouseCode'].toString(),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            )),
-      ],
-    );
-  }
-
   @override
   void dispose() {
     _debounceTimer?.cancel();
@@ -680,11 +662,14 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
   }
 }
 
-// ─── SHEET DO CARRINHO ────────────────────────────────────────────────────────
+// ── Sheet do carrinho de impressão ───────────────────────────────────────────
 
+/// Bottom sheet com estado próprio para gerenciar a fila de impressão.
+/// Mantém cópia local das chaves para atualizar a lista imediatamente
+/// ao excluir sem depender do setState do pai.
 class _CarrinhoSheet extends StatefulWidget {
   final Map<String, Map<String, dynamic>> carrinho;
-  final Color primaryColor;
+  final Color        primaryColor;
   final void Function(String code) onRemover;
   final VoidCallback onLimpar;
   final VoidCallback onImprimir;
@@ -733,7 +718,8 @@ class _CarrinhoSheetState extends State<_CarrinhoSheet> {
       child: Column(children: [
         const SizedBox(height: 12),
         Container(
-          width: 48, height: 6,
+          width: 48,
+          height: 6,
           decoration: BoxDecoration(
               color: Colors.grey.shade300,
               borderRadius: BorderRadius.circular(10)),
@@ -744,9 +730,10 @@ class _CarrinhoSheetState extends State<_CarrinhoSheet> {
             Icon(Icons.print_rounded, color: widget.primaryColor),
             const SizedBox(width: 12),
             Expanded(
-              child: Text('Fila de impressão (${_keys.length})',
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.bold)),
+              child: Text(
+                'Fila de impressão (${_keys.length})',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
             ),
             if (_keys.isNotEmpty)
               TextButton.icon(
@@ -754,12 +741,13 @@ class _CarrinhoSheetState extends State<_CarrinhoSheet> {
                   context: context,
                   builder: (_) => AlertDialog(
                     title: const Text('Limpar fila'),
-                    content: const Text(
-                        'Remover todos os itens da fila de impressão?'),
+                    content:
+                        const Text('Remover todos os itens da fila de impressão?'),
                     actions: [
                       StoxTextButton(
-                          label: 'CANCELAR',
-                          onPressed: () => Navigator.pop(context)),
+                        label:     'CANCELAR',
+                        onPressed: () => Navigator.pop(context),
+                      ),
                       ElevatedButton(
                         onPressed: () {
                           Navigator.pop(context);
@@ -822,8 +810,7 @@ class _CarrinhoSheetState extends State<_CarrinhoSheet> {
                       child: StoxCard(
                         child: ListTile(
                           leading: CircleAvatar(
-                            backgroundColor:
-                                widget.primaryColor.withAlpha(20),
+                            backgroundColor: widget.primaryColor.withAlpha(20),
                             child: Icon(Icons.label_rounded,
                                 color: widget.primaryColor, size: 18),
                           ),
@@ -852,11 +839,11 @@ class _CarrinhoSheetState extends State<_CarrinhoSheet> {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
             child: StoxButton(
-              label:
-                  'Imprimir ${_keys.length} ${_keys.length == 1 ? "etiqueta" : "etiquetas"}',
-              icon: Icons.print_rounded,
+              label: 'Imprimir ${_keys.length} '
+                  '${_keys.length == 1 ? "etiqueta" : "etiquetas"}',
+              icon:      Icons.print_rounded,
               onPressed: widget.onImprimir,
-              height: 52,
+              height:    52,
             ),
           ),
       ]),

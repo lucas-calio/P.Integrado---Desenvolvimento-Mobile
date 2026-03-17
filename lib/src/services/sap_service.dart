@@ -1,224 +1,211 @@
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// Camada de acesso ao SAP Business One Service Layer (OData v2).
+///
+/// Todos os métodos são estáticos — a classe não deve ser instanciada.
+/// A sessão é mantida via cookies B1SESSION/ROUTEID em [SharedPreferences].
 class SapService {
-  // ==========================================
-  // CONFIGURAÇÃO DE CLIENTE (SSL) E URL
-  // ==========================================
+  SapService._();
 
+  // ── Cliente HTTP ──────────────────────────────────────────────────────────
+
+  /// Cria um cliente HTTP respeitando a preferência de SSL do usuário.
+  /// Sempre feche o cliente no bloco `finally` para evitar vazamento de sockets.
   static Future<http.Client> _getClient() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs          = await SharedPreferences.getInstance();
     final permitirInseguro = prefs.getBool('sap_allow_untrusted') ?? true;
 
     if (permitirInseguro) {
       final ioClient = HttpClient()
         ..connectionTimeout = const Duration(seconds: 15)
-        ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
+        ..badCertificateCallback =
+            (X509Certificate cert, String host, int port) => true;
       return IOClient(ioClient);
     }
     return http.Client();
   }
 
-  static String _prepareUrl(String url) {
-    if (url.isEmpty) return "";
-    return url.endsWith('/') ? url : '$url/';
-  }
+  static String _baseUrl(String url) =>
+      url.isEmpty ? '' : (url.endsWith('/') ? url : '$url/');
 
-  // ==========================================
-  // MÉTODOS DE AUTENTICAÇÃO E USUÁRIO
-  // ==========================================
+  static String _cookie(String session, String? routeId) =>
+      'B1SESSION=$session${routeId != null ? '; ROUTEID=$routeId' : ''}';
 
-  static Future<bool> login({required String usuario, required String senha}) async {
-    final prefs = await SharedPreferences.getInstance();
-    final baseUrl = prefs.getString('sap_url');
-    final company = prefs.getString('sap_company');
+  // ── Autenticação ──────────────────────────────────────────────────────────
 
-    if (baseUrl == null || company == null || baseUrl.isEmpty || company.isEmpty) return false;
+  /// Autentica o usuário no SAP e salva a sessão localmente.
+  /// Retorna `true` em caso de sucesso.
+  static Future<bool> login({
+    required String usuario,
+    required String senha,
+  }) async {
+    final prefs   = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('sap_url')     ?? '';
+    final company = prefs.getString('sap_company') ?? '';
+
+    if (baseUrl.isEmpty || company.isEmpty) return false;
 
     http.Client? client;
     try {
       client = await _getClient();
-      final fullUrl = "${_prepareUrl(baseUrl)}Login";
-      
       final response = await client.post(
-        Uri.parse(fullUrl),
-        headers: {"Content-Type": "application/json"},
+        Uri.parse('${_baseUrl(baseUrl)}Login'),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          "CompanyDB": company,
-          "UserName": usuario,
-          "Password": senha,
-          "Language": 29
+          'CompanyDB': company,
+          'UserName':  usuario,
+          'Password':  senha,
+          'Language':  29,
         }),
       ).timeout(const Duration(seconds: 15));
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final sessionId = data['SessionId'];
-        if (sessionId != null) {
-          await prefs.setString('B1SESSION', sessionId);
-        }
+      if (response.statusCode != 200) return false;
 
-        // Extração segura dos cookies (B1SESSION e ROUTEID)
-        final rawCookie = response.headers['set-cookie'];
-        if (rawCookie != null) {
-          final routeIdMatch = RegExp(r'ROUTEID=([^;]+)').firstMatch(rawCookie);
-          if (routeIdMatch != null) {
-            await prefs.setString('ROUTEID', routeIdMatch.group(1)!);
-          }
-        }
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final sessionId = data['SessionId'] as String?;
+      if (sessionId != null) await prefs.setString('B1SESSION', sessionId);
 
-        // --- NOVO: BUSCA E SALVA O NOME DO OPERADOR ---
-        final nomeOperador = await getNomeOperador(usuario);
-        // Se encontrar o nome usa ele, se não achar, usa o próprio código de usuário como fallback
-        await prefs.setString('UserName', nomeOperador ?? usuario);
-        // ----------------------------------------------
-
-        return true;
+      final rawCookie = response.headers['set-cookie'];
+      if (rawCookie != null) {
+        final match = RegExp(r'ROUTEID=([^;]+)').firstMatch(rawCookie);
+        if (match != null) await prefs.setString('ROUTEID', match.group(1)!);
       }
-      return false;
+
+      final nome = await _buscarNomeOperador(usuario);
+      await prefs.setString('UserName', nome ?? usuario);
+
+      return true;
     } catch (e) {
-      debugPrint("❌ Erro no login: $e");
+      debugPrint('SapService.login: $e');
       return false;
     } finally {
-      client?.close(); // Essencial para evitar vazamento de sockets em produção
+      client?.close();
     }
   }
 
-  static Future<String?> getNomeOperador(String userCode) async {
-    final prefs = await SharedPreferences.getInstance();
-    final baseUrl = prefs.getString('sap_url');
-    final session = prefs.getString('B1SESSION');
+  /// Busca o nome completo do operador pelo código de usuário SAP.
+  static Future<String?> _buscarNomeOperador(String userCode) async {
+    final prefs   = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('sap_url')     ?? '';
+    final session = prefs.getString('B1SESSION')   ?? '';
     final routeId = prefs.getString('ROUTEID');
 
-    if (baseUrl == null || session == null || baseUrl.isEmpty) return null;
+    if (baseUrl.isEmpty || session.isEmpty) return null;
 
     http.Client? client;
     try {
       client = await _getClient();
-      final cleanCode = userCode.trim().replaceAll("'", "''");
-      final filter = "\$filter=UserCode eq '$cleanCode'";
-      final fullUri = Uri.parse("${_prepareUrl(baseUrl)}Users?\$select=UserName&$filter");
+      final codigo = userCode.trim().replaceAll("'", "''");
+      final uri    = Uri.parse(
+          '${_baseUrl(baseUrl)}Users?\$select=UserName&\$filter=UserCode eq \'$codigo\'');
 
-      final cookieHeader = "B1SESSION=$session${routeId != null ? '; ROUTEID=$routeId' : ''}";
-
-      final response = await client.get(
-        fullUri,
-        headers: {
-          "Cookie": cookieHeader,
-          "Accept": "application/json",
-        },
-      ).timeout(const Duration(seconds: 15));
+      final response = await client.get(uri, headers: {
+        'Cookie': _cookie(session, routeId),
+        'Accept': 'application/json',
+      }).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final List dinamicList = data['value'] ?? [];
-        if (dinamicList.isNotEmpty) {
-          return dinamicList.first['UserName'];
-        }
+        final lista = (jsonDecode(response.body)['value'] as List?) ?? [];
+        if (lista.isNotEmpty) return lista.first['UserName'] as String?;
       }
     } catch (e) {
-      debugPrint("💥 Erro ao buscar nome do operador: $e");
+      debugPrint('SapService._buscarNomeOperador: $e');
     } finally {
       client?.close();
     }
     return null;
   }
 
+  /// Invalida a sessão no servidor e limpa os dados locais.
   static Future<void> logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    final baseUrl = prefs.getString('sap_url');
-    final session = prefs.getString('B1SESSION');
+    final prefs   = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('sap_url')   ?? '';
+    final session = prefs.getString('B1SESSION') ?? '';
 
-    if (baseUrl != null && session != null && baseUrl.isNotEmpty) {
+    if (baseUrl.isNotEmpty && session.isNotEmpty) {
       http.Client? client;
       try {
         client = await _getClient();
         await client.post(
-          Uri.parse("${_prepareUrl(baseUrl)}Logout"),
-          headers: {"Cookie": "B1SESSION=$session"},
+          Uri.parse('${_baseUrl(baseUrl)}Logout'),
+          headers: {'Cookie': 'B1SESSION=$session'},
         ).timeout(const Duration(seconds: 5));
       } catch (e) {
-        debugPrint("Aviso ao fazer logout no SAP: $e");
+        debugPrint('SapService.logout: $e');
       } finally {
         client?.close();
       }
     }
-    
+
     await prefs.remove('B1SESSION');
     await prefs.remove('ROUTEID');
-    await prefs.remove('UserName'); // Remove o nome ao deslogar
+    await prefs.remove('UserName');
   }
 
-  // ==========================================
-  // MÉTODOS DE CONSULTA
-  // ==========================================
+  // ── Consulta ──────────────────────────────────────────────────────────────
 
-  /// Retorna true se há sessão SAP ativa no dispositivo.
-  /// Não faz requisição de rede — apenas verifica o SharedPreferences.
+  /// Verifica se há sessão ativa sem fazer requisição de rede.
   static Future<bool> verificarSessao() async {
-    final prefs   = await SharedPreferences.getInstance();
-    final baseUrl = prefs.getString('sap_url')  ?? '';
-    final session = prefs.getString('B1SESSION') ?? '';
-    return baseUrl.isNotEmpty && session.isNotEmpty;
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getString('sap_url')     ?? '').isNotEmpty &&
+           (prefs.getString('B1SESSION')   ?? '').isNotEmpty;
   }
 
+  /// Busca itens por código ou nome (máx. 20 resultados pelo OData padrão).
   static Future<List<dynamic>> searchItems(String termo) async {
-    final prefs = await SharedPreferences.getInstance();
-    final baseUrl = prefs.getString('sap_url');
-    final session = prefs.getString('B1SESSION');
+    final prefs   = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('sap_url')   ?? '';
+    final session = prefs.getString('B1SESSION') ?? '';
     final routeId = prefs.getString('ROUTEID');
 
-    if (baseUrl == null || session == null || baseUrl.isEmpty) return [];
+    if (baseUrl.isEmpty || session.isEmpty) return [];
 
     http.Client? client;
     try {
       client = await _getClient();
-      final termoLimpo = termo.replaceAll("'", "''"); // Previne quebra na query OData
-      final filter = "\$filter=contains(ItemCode, '$termoLimpo') or contains(ItemName, '$termoLimpo')";
-      final fullUri = Uri.parse("${_prepareUrl(baseUrl)}Items?\$select=ItemCode,ItemName&$filter");
+      final t   = termo.replaceAll("'", "''");
+      final uri = Uri.parse(
+          "${_baseUrl(baseUrl)}Items?\$select=ItemCode,ItemName"
+          "&\$filter=contains(ItemCode,'$t') or contains(ItemName,'$t')");
 
-      final cookieHeader = "B1SESSION=$session${routeId != null ? '; ROUTEID=$routeId' : ''}";
-
-      final response = await client.get(
-        fullUri,
-        headers: {
-          "Cookie": cookieHeader,
-          "Accept": "application/json",
-        },
-      ).timeout(const Duration(seconds: 15));
+      final response = await client.get(uri, headers: {
+        'Cookie': _cookie(session, routeId),
+        'Accept': 'application/json',
+      }).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body)['value'] as List<dynamic>;
-      } else if (response.statusCode == 401) {
-        // Sessão expirou
-        await logout();
       }
+      if (response.statusCode == 401) await logout();
     } catch (e) {
-      debugPrint("💥 Erro searchItems: $e");
+      debugPrint('SapService.searchItems: $e');
     } finally {
       client?.close();
     }
     return [];
   }
 
+  /// Retorna os detalhes completos de um item, incluindo estoque por depósito
+  /// e listas de preço. Campos confirmados com JSON real do SAP B1.
   static Future<Map<String, dynamic>?> getDetailedItem(String itemCode) async {
-    final prefs = await SharedPreferences.getInstance();
-    final baseUrl = prefs.getString('sap_url');
-    final session = prefs.getString('B1SESSION');
+    final prefs   = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('sap_url')   ?? '';
+    final session = prefs.getString('B1SESSION') ?? '';
     final routeId = prefs.getString('ROUTEID');
 
-    if (baseUrl == null || session == null || baseUrl.isEmpty) return null;
+    if (baseUrl.isEmpty || session.isEmpty) return null;
 
     http.Client? client;
     try {
       client = await _getClient();
-      final cleanCode = itemCode.trim().toUpperCase().replaceAll("'", "''");
-      
-      // Campos confirmados com JSON real do SAP B1
+      final code = itemCode.trim().toUpperCase().replaceAll("'", "''");
+
       const fields =
           'ItemCode,ItemName,ForeignName,InventoryUOM,'
           'InventoryItem,SalesItem,PurchaseItem,Frozen,'
@@ -231,60 +218,56 @@ class SapService {
           'QuantityOnStock,QuantityOrderedFromVendors,QuantityOrderedByCustomers,'
           'Mainsupplier,Manufacturer,'
           'ItemWarehouseInfoCollection,ItemPreferredVendors,ItemPrices';
-      final url = "${_prepareUrl(baseUrl)}Items('$cleanCode')?\$select=$fields";
-      
-      final cookieHeader = "B1SESSION=$session${routeId != null ? '; ROUTEID=$routeId' : ''}";
 
-      final response = await client.get(
-        Uri.parse(url),
-        headers: {
-          "Cookie": cookieHeader,
-          "Accept": "application/json",
-        },
-      ).timeout(const Duration(seconds: 15));
+      final uri = Uri.parse(
+          "${_baseUrl(baseUrl)}Items('$code')?\$select=$fields");
+
+      final response = await client.get(uri, headers: {
+        'Cookie': _cookie(session, routeId),
+        'Accept': 'application/json',
+      }).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
-        return jsonDecode(response.body);
-      } else if (response.statusCode == 401) {
-        await logout();
+        return jsonDecode(response.body) as Map<String, dynamic>;
       }
+      if (response.statusCode == 401) await logout();
     } catch (e) {
-      debugPrint("💥 Erro getDetailedItem: $e");
+      debugPrint('SapService.getDetailedItem: $e');
     } finally {
       client?.close();
     }
     return null;
   }
 
-  // ==========================================
-  // MÉTODOS DE INVENTÁRIO
-  // ==========================================
+  // ── Inventário ────────────────────────────────────────────────────────────
 
-  static Future<String?> postInventoryCounting(List<Map<String, dynamic>> contagens) async {
-    final prefs = await SharedPreferences.getInstance();
-    final baseUrl = prefs.getString('sap_url');
-    final session = prefs.getString('B1SESSION');
+  /// Envia as contagens offline para o SAP Business One.
+  ///
+  /// Retorna `null` em caso de sucesso ou uma mensagem de erro legível.
+  static Future<String?> postInventoryCounting(
+      List<Map<String, dynamic>> contagens) async {
+    final prefs   = await SharedPreferences.getInstance();
+    final baseUrl = prefs.getString('sap_url')   ?? '';
+    final session = prefs.getString('B1SESSION') ?? '';
     final routeId = prefs.getString('ROUTEID');
 
-    if (baseUrl == null || session == null || baseUrl.isEmpty) return "Sessão expirada. Faça login novamente.";
+    if (baseUrl.isEmpty || session.isEmpty) {
+      return 'Sessão expirada. Faça login novamente.';
+    }
 
     final payload = {
-      "CountDate": DateTime.now().toIso8601String().split('T')[0],
-      "InventoryCountingLines": contagens.map((c) {
+      'CountDate': DateTime.now().toIso8601String().split('T')[0],
+      'InventoryCountingLines': contagens.map((c) {
         final code = c['itemCode'].toString().trim().toUpperCase();
-        final qtd = double.tryParse(c['quantidade'].toString()) ?? 0.0;
-
+        final qtd  = double.tryParse(c['quantidade'].toString()) ?? 0.0;
         return {
-          "ItemCode": code,
-          "WarehouseCode": "01", // Depósito fixo conforme regra de negócio (ajustar se for dinâmico)
-          "CountedQuantity": qtd,
-          "Counted": "tYES",
-          "InventoryCountingBatchNumbers": [
-            {
-              "BatchNumber": code, // Código usado como Lote no cenário do Agrobusiness
-              "Quantity": qtd,
-            }
-          ]
+          'ItemCode':       code,
+          'WarehouseCode':  c['warehouseCode']?.toString() ?? '01',
+          'CountedQuantity': qtd,
+          'Counted':        'tYES',
+          'InventoryCountingBatchNumbers': [
+            {'BatchNumber': code, 'Quantity': qtd},
+          ],
         };
       }).toList(),
     };
@@ -292,35 +275,31 @@ class SapService {
     http.Client? client;
     try {
       client = await _getClient();
-      final cookieHeader = "B1SESSION=$session${routeId != null ? '; ROUTEID=$routeId' : ''}";
-
       final response = await client.post(
-        Uri.parse("${_prepareUrl(baseUrl)}InventoryCountings"),
+        Uri.parse('${_baseUrl(baseUrl)}InventoryCountings'),
         headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-          "Cookie": cookieHeader,
+          'Content-Type': 'application/json',
+          'Accept':       'application/json',
+          'Cookie':       _cookie(session, routeId),
         },
         body: jsonEncode(payload),
       ).timeout(const Duration(seconds: 30));
 
-      if (response.statusCode == 201 || response.statusCode == 200) {
-        return null; // Sucesso
-      } else if (response.statusCode == 401) {
+      if (response.statusCode == 200 || response.statusCode == 201) return null;
+
+      if (response.statusCode == 401) {
         await logout();
-        return "Sessão expirada. Faça login novamente no SAP.";
-      } else {
-        // Tenta extrair a mensagem de erro da API do SAP
-        try {
-          final errorData = jsonDecode(response.body);
-          if (errorData['error'] != null && errorData['error']['message'] != null) {
-            return errorData['error']['message']['value'].toString();
-          }
-        } catch (_) {}
-        return response.body; // Retorna o body bruto se não conseguir fazer o parse
+        return 'Sessão expirada. Faça login novamente no SAP.';
+      }
+
+      try {
+        final err = jsonDecode(response.body);
+        return err['error']?['message']?['value']?.toString() ?? response.body;
+      } catch (_) {
+        return response.body;
       }
     } catch (e) {
-      return "Falha de comunicação: $e";
+      return 'Falha de comunicação: $e';
     } finally {
       client?.close();
     }

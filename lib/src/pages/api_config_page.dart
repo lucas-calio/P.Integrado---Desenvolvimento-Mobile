@@ -6,6 +6,10 @@ import 'package:vibration/vibration.dart';
 
 import '../widgets/widgets.dart';
 
+/// Tela de configuração da conexão com o SAP Business One Service Layer.
+///
+/// Persiste URL, CompanyDB, depósito padrão e política de SSL
+/// via [SharedPreferences].
 class ApiConfigPage extends StatefulWidget {
   const ApiConfigPage({super.key});
 
@@ -17,14 +21,14 @@ class _ApiConfigPageState extends State<ApiConfigPage> {
   final _urlController      = TextEditingController();
   final _companyController  = TextEditingController();
   final _depositoController = TextEditingController();
-  final AudioPlayer _audio  = AudioPlayer();
+  final _audio              = AudioPlayer();
 
   bool _permitirSslInseguro = true;
 
   @override
   void initState() {
     super.initState();
-    _loadConfig();
+    _carregarConfig();
   }
 
   @override
@@ -36,28 +40,27 @@ class _ApiConfigPageState extends State<ApiConfigPage> {
     super.dispose();
   }
 
-  // ─── FEEDBACK ──────────────────────────────────────────────────────────────
+  // ── Feedback ─────────────────────────────────────────────────────────────
 
   Future<void> _play(String asset, {bool isError = false}) async {
     try {
-      if (await Vibration.hasVibrator()) {
-        if (isError) {
-          Vibration.vibrate(pattern: [0, 200, 100, 300]);
-        } else {
-          Vibration.vibrate(duration: 120);
-        }
+      final temVibrador = await Vibration.hasVibrator();
+      if (temVibrador) {
+        isError
+            ? Vibration.vibrate(pattern: [0, 200, 100, 300])
+            : Vibration.vibrate(duration: 120);
       } else {
         isError ? HapticFeedback.vibrate() : HapticFeedback.heavyImpact();
       }
       await _audio.play(AssetSource(asset));
     } catch (e) {
-      debugPrint('Feedback error: $e');
+      debugPrint('ApiConfigPage._play: $e');
     }
   }
 
-  // ─── DADOS ─────────────────────────────────────────────────────────────────
+  // ── Dados ─────────────────────────────────────────────────────────────────
 
-  Future<void> _loadConfig() async {
+  Future<void> _carregarConfig() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
@@ -68,31 +71,30 @@ class _ApiConfigPageState extends State<ApiConfigPage> {
     });
   }
 
-  Future<void> _saveConfig() async {
+  Future<void> _salvarConfig() async {
     FocusScope.of(context).unfocus();
 
     final deposito = _depositoController.text.trim();
     if (deposito.isEmpty) {
       await _play('sounds/error_beep.mp3', isError: true);
-      // ignore: use_build_context_synchronously
-    StoxSnackbar.aviso(context, 'Informe o código do depósito padrão.');
+      if (!mounted) return;
+      StoxSnackbar.aviso(context, 'Informe o código do depósito padrão.');
       return;
     }
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('sap_url',            _urlController.text.trim());
-    await prefs.setString('sap_company',         _companyController.text.trim());
-    await prefs.setString('sap_deposito_padrao', deposito.toUpperCase());
-    await prefs.setBool('sap_allow_untrusted',   _permitirSslInseguro);
+    await prefs.setString('sap_url',             _urlController.text.trim());
+    await prefs.setString('sap_company',          _companyController.text.trim());
+    await prefs.setString('sap_deposito_padrao',  deposito.toUpperCase());
+    await prefs.setBool('sap_allow_untrusted',    _permitirSslInseguro);
 
     await _play('sounds/check.mp3');
     if (!mounted) return;
-    // ignore: use_build_context_synchronously
     StoxSnackbar.sucesso(context, 'Configurações salvas com sucesso!');
     Navigator.pop(context);
   }
 
-  // ─── BUILD ─────────────────────────────────────────────────────────────────
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -106,16 +108,17 @@ class _ApiConfigPageState extends State<ApiConfigPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('Conexão Service Layer',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-              const SizedBox(height: 10),
+              const Text(
+                'Conexão Service Layer',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+              const SizedBox(height: 8),
               Text(
                 'Ajuste os endereços para sincronização com o SAP Business One.',
                 style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
               ),
               const SizedBox(height: 30),
 
-              // ── URL ──
               StoxTextField(
                 controller: _urlController,
                 labelText: 'Service Layer URL',
@@ -125,7 +128,6 @@ class _ApiConfigPageState extends State<ApiConfigPage> {
               ),
               const SizedBox(height: 20),
 
-              // ── Company ──
               StoxTextField(
                 controller: _companyController,
                 labelText: 'CompanyDB',
@@ -134,30 +136,27 @@ class _ApiConfigPageState extends State<ApiConfigPage> {
               ),
               const SizedBox(height: 20),
 
-              // ── Depósito ──
               StoxTextField(
                 controller: _depositoController,
                 labelText: 'Depósito Padrão',
                 prefixIcon: Icons.warehouse_rounded,
                 textInputAction: TextInputAction.done,
                 textCapitalization: TextCapitalization.characters,
-                onSubmitted: (_) => _saveConfig(),
-                helperText:
-                    'Código do depósito usado nas contagens de inventário.',
+                onSubmitted: (_) => _salvarConfig(),
+                helperText: 'Código do depósito usado nas contagens de inventário.',
               ),
               const SizedBox(height: 25),
 
-              // ── SSL ──
               StoxCard(
                 child: SwitchListTile.adaptive(
-                  title: const Text('Permitir SSL pré-assinado',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w500, fontSize: 15)),
+                  title: const Text(
+                    'Permitir SSL pré-assinado',
+                    style: TextStyle(fontWeight: FontWeight.w500, fontSize: 15),
+                  ),
                   subtitle: Text(
                     'Ative se o servidor SAP usar certificado auto-assinado '
-                    '(comum em dev/test).',
-                    style:
-                        TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    '(comum em ambientes de desenvolvimento e teste).',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                   ),
                   value: _permitirSslInseguro,
                   // ignore: deprecated_member_use
@@ -171,11 +170,10 @@ class _ApiConfigPageState extends State<ApiConfigPage> {
 
               const SizedBox(height: 40),
 
-              // ── Salvar ──
               StoxButton(
                 label: 'SALVAR CONFIGURAÇÕES',
                 icon: Icons.save_rounded,
-                onPressed: _saveConfig,
+                onPressed: _salvarConfig,
               ),
 
               const SizedBox(height: 20),

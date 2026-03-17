@@ -10,6 +10,10 @@ import '../services/export_service.dart';
 import '../services/ocr_service.dart';
 import '../widgets/widgets.dart';
 
+/// Tela de contagem de estoque offline.
+///
+/// Os dados são persistidos localmente via [DatabaseHelper] e
+/// sincronizados com o SAP Business One pela [HomePage].
 class ContadorOfflinePage extends StatefulWidget {
   const ContadorOfflinePage({super.key});
 
@@ -22,13 +26,12 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
   final _quantidadeController = TextEditingController(text: '1');
   final _depositoController   = TextEditingController(text: '01');
   final _focusNodeCodigo      = FocusNode();
-  final AudioPlayer _audio    = AudioPlayer();
+  final _audio                = AudioPlayer();
 
-  List<Map<String, dynamic>> _contagens = [];
-  bool _scannerProcessando = false;
-
-  bool _modoSelecao = false;
-  final Set<int> _selecionados = {};
+  List<Map<String, dynamic>> _contagens    = [];
+  bool                       _scannerAtivo = false;
+  bool                       _modoSelecao  = false;
+  final Set<int>             _selecionados = {};
 
   @override
   void initState() {
@@ -47,12 +50,13 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
     super.dispose();
   }
 
-  // ─── FEEDBACK ────────────────────────────────────────────────────────────
+  // ── Feedback ─────────────────────────────────────────────────────────────
 
   Future<void> _play(String asset,
       {bool isError = false, bool isFail = false}) async {
     try {
-      if (await Vibration.hasVibrator()) {
+      final temVibrador = await Vibration.hasVibrator();
+      if (temVibrador) {
         if (isFail) {
           Vibration.vibrate(pattern: [0, 400, 100, 400]);
         } else if (isError) {
@@ -61,19 +65,17 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
           Vibration.vibrate(duration: 100);
         }
       } else {
-        if (isFail || isError) {
-          HapticFeedback.vibrate();
-        } else {
-          HapticFeedback.lightImpact();
-        }
+        (isFail || isError)
+            ? HapticFeedback.vibrate()
+            : HapticFeedback.lightImpact();
       }
       await _audio.play(AssetSource(asset));
     } catch (e) {
-      debugPrint('Feedback error: $e');
+      debugPrint('ContadorOfflinePage._play: $e');
     }
   }
 
-  // ─── DADOS ───────────────────────────────────────────────────────────────
+  // ── Dados ─────────────────────────────────────────────────────────────────
 
   Future<void> _carregarConfiguracoes() async {
     final prefs    = await SharedPreferences.getInstance();
@@ -83,16 +85,14 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
 
   Future<void> _carregarContagens() async {
     final lista = await DatabaseHelper.instance.buscarContagens();
-    if (mounted) {
-      setState(() {
-        _contagens = lista;
-        _selecionados.removeWhere(
-            (id) => !lista.any((c) => c['id'] == id));
-      });
-    }
+    if (!mounted) return;
+    setState(() {
+      _contagens = lista;
+      _selecionados.removeWhere((id) => !lista.any((c) => c['id'] == id));
+    });
   }
 
-  // ─── SELEÇÃO MÚLTIPLA ────────────────────────────────────────────────────
+  // ── Seleção múltipla ──────────────────────────────────────────────────────
 
   void _entrarModoSelecao(int id) {
     HapticFeedback.mediumImpact();
@@ -102,12 +102,10 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
     });
   }
 
-  void _sairModoSelecao() {
-    setState(() {
-      _modoSelecao = false;
-      _selecionados.clear();
-    });
-  }
+  void _sairModoSelecao() => setState(() {
+        _modoSelecao = false;
+        _selecionados.clear();
+      });
 
   void _toggleSelecao(int id) {
     HapticFeedback.selectionClick();
@@ -143,7 +141,7 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
       context: context,
       barrierDismissible: false,
       builder: (_) => _DialogoConfirmacaoExclusao(
-        quantidade: qtd,
+        quantidade:   qtd,
         isTodosItens: todosItens,
         itens: _contagens
             .where((c) => _selecionados.contains(c['id']))
@@ -151,7 +149,7 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
       ),
     );
 
-    if (confirmado != true) return;
+    if (confirmado != true || !mounted) return;
 
     try {
       for (final id in _selecionados) {
@@ -160,23 +158,25 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
       await _play('sounds/check.mp3');
       _sairModoSelecao();
       await _carregarContagens();
-      // ignore: use_build_context_synchronously
-      StoxSnackbar.sucesso(context,
-          '$qtd ${qtd == 1 ? 'registro removido' : 'registros removidos'} com sucesso.');
+      if (!mounted) return;
+      StoxSnackbar.sucesso(
+        context,
+        '$qtd ${qtd == 1 ? 'registro removido' : 'registros removidos'} com sucesso.',
+      );
     } catch (e) {
       await _play('sounds/fail.mp3', isFail: true);
-      // ignore: use_build_context_synchronously
+      if (!mounted) return;
       StoxSnackbar.erro(context, 'Erro ao excluir: $e');
     }
   }
 
-  // ─── DUPLICATA ───────────────────────────────────────────────────────────
+  // ── Duplicata ─────────────────────────────────────────────────────────────
 
   Map<String, dynamic>? _buscarDuplicata(String itemCode) {
     final codigo = itemCode.trim().toUpperCase();
     try {
-      return _contagens.firstWhere(
-          (c) => c['itemCode'].toString().toUpperCase() == codigo);
+      return _contagens
+          .firstWhere((c) => c['itemCode'].toString().toUpperCase() == codigo);
     } catch (_) {
       return null;
     }
@@ -187,7 +187,6 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
     await _play('sounds/error_beep.mp3', isError: true);
     if (!mounted) return false;
 
-    // ignore: use_build_context_synchronously
     final resultado = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -198,8 +197,9 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-                color: Colors.orange.shade50,
-                borderRadius: BorderRadius.circular(8)),
+              color: Colors.orange.shade50,
+              borderRadius: BorderRadius.circular(8),
+            ),
             child: Icon(Icons.warning_amber_rounded,
                 color: Colors.orange.shade700, size: 24),
           ),
@@ -215,17 +215,20 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
           children: [
             const SizedBox(height: 12),
             Text(
-                'O item ${existente['itemCode']} já foi registrado nesta sessão.',
-                style: const TextStyle(fontSize: 14, height: 1.5)),
+              'O item ${existente['itemCode']} já foi registrado nesta sessão.',
+              style: const TextStyle(fontSize: 14, height: 1.5),
+            ),
             const SizedBox(height: 16),
             StoxCard(
               padding: const EdgeInsets.all(12),
               child: Column(children: [
-                _linhaComparativo('Quantidade atual',
-                    '${existente['quantidade']}', Colors.grey.shade700),
+                _linhaComparativo(
+                    'Quantidade atual', '${existente['quantidade']}',
+                    Colors.grey.shade700),
                 const SizedBox(height: 8),
                 _linhaComparativo('Nova quantidade', '$novaQuantidade',
-                    Colors.orange.shade700, negrito: true),
+                    Colors.orange.shade700,
+                    negrito: true),
                 const SizedBox(height: 8),
                 _linhaComparativo('Depósito',
                     existente['warehouseCode'] ?? '01', Colors.grey.shade700),
@@ -299,8 +302,7 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
     );
   }
 
-  void _ajustarQuantidade(double valor,
-      {TextEditingController? controller}) {
+  void _ajustarQuantidade(double valor, {TextEditingController? controller}) {
     HapticFeedback.selectionClick();
     final target = controller ?? _quantidadeController;
     final atual  = double.tryParse(target.text.replaceAll(',', '.')) ?? 0;
@@ -312,24 +314,24 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
     });
   }
 
-  // ─── AÇÕES ───────────────────────────────────────────────────────────────
+  // ── Ações ─────────────────────────────────────────────────────────────────
 
   Future<void> _exportarRelatorio() async {
     HapticFeedback.lightImpact();
+    if (_contagens.isEmpty) {
+      await _play('sounds/error_beep.mp3', isError: true);
+      if (!mounted) return;
+      StoxSnackbar.aviso(context, 'Nenhuma contagem para exportar!');
+      return;
+    }
     try {
-      if (_contagens.isEmpty) {
-        await _play('sounds/error_beep.mp3', isError: true);
-        // ignore: use_build_context_synchronously
-        StoxSnackbar.aviso(context, 'Nenhuma contagem para exportar!');
-        return;
-      }
       await ExportService.exportarContagensParaCSV(_contagens);
       await _play('sounds/check.mp3');
-      // ignore: use_build_context_synchronously
+      if (!mounted) return;
       StoxSnackbar.sucesso(context, 'Relatório exportado com sucesso!');
     } catch (e) {
       await _play('sounds/fail.mp3', isFail: true);
-      // ignore: use_build_context_synchronously
+      if (!mounted) return;
       StoxSnackbar.erro(context, 'Erro ao exportar: $e');
     }
   }
@@ -338,6 +340,7 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
     HapticFeedback.lightImpact();
     FocusScope.of(context).unfocus();
     final resultado = await OcrService.lerAnotacaoDaCamera();
+    if (!mounted) return;
     if (resultado != null) {
       setState(() {
         if (resultado['itemCode']!.isNotEmpty) {
@@ -348,12 +351,12 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
         }
       });
       await _play('sounds/beep.mp3');
-      // ignore: use_build_context_synchronously
+      if (!mounted) return;
       StoxSnackbar.sucesso(context, 'Leitura via IA concluída!');
       _focusNodeCodigo.nextFocus();
     } else {
       await _play('sounds/error_beep.mp3', isError: true);
-      // ignore: use_build_context_synchronously
+      if (!mounted) return;
       StoxSnackbar.aviso(context, 'Nenhum texto reconhecido.');
     }
   }
@@ -361,154 +364,159 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
   void _abrirScanner() {
     HapticFeedback.lightImpact();
     FocusScope.of(context).unfocus();
-    _scannerProcessando = false;
+    _scannerAtivo = false;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) =>
-          LayoutBuilder(builder: (context, constraints) {
-        final scanWindow = Rect.fromCenter(
-          center: Offset(constraints.maxWidth / 2, 200),
-          width: 280, height: 180,
-        );
-        return Container(
-          height: MediaQuery.of(context).size.height * 0.85,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: SafeArea(
-            child: Column(children: [
-              const SizedBox(height: 12),
-              Container(
-                width: 48, height: 6,
-                decoration: BoxDecoration(
-                    color: Colors.grey.shade300,
-                    borderRadius: BorderRadius.circular(10)),
-              ),
-              AppBar(
-                title: const Text('Escanear Código',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
-                centerTitle: true,
-                backgroundColor: Colors.transparent,
-                foregroundColor: Colors.black87,
-                elevation: 0,
-                automaticallyImplyLeading: false,
-                actions: [
-                  IconButton(
-                    icon: const Icon(Icons.close_rounded),
-                    onPressed: () {
-                      HapticFeedback.selectionClick();
-                      Navigator.pop(context);
-                    },
-                  ),
-                ],
-              ),
-              Expanded(
-                child: Stack(children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: MobileScanner(
-                      scanWindow: scanWindow,
-                      onDetect: (capture) async {
-                        if (_scannerProcessando) return;
-                        final barcodes = capture.barcodes;
-                        if (barcodes.isNotEmpty) {
-                          _scannerProcessando = true;
+      builder: (sheetCtx) => LayoutBuilder(
+        builder: (sheetCtx, constraints) {
+          final scanWindow = Rect.fromCenter(
+            center: Offset(constraints.maxWidth / 2, 200),
+            width: 280,
+            height: 180,
+          );
+          return Container(
+            height: MediaQuery.of(sheetCtx).size.height * 0.85,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            child: SafeArea(
+              child: Column(children: [
+                const SizedBox(height: 12),
+                Container(
+                  width: 48,
+                  height: 6,
+                  decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                AppBar(
+                  title: const Text('Escanear Código',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  centerTitle: true,
+                  backgroundColor: Colors.transparent,
+                  foregroundColor: Colors.black87,
+                  elevation: 0,
+                  automaticallyImplyLeading: false,
+                  actions: [
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () {
+                        HapticFeedback.selectionClick();
+                        Navigator.pop(sheetCtx);
+                      },
+                    ),
+                  ],
+                ),
+                Expanded(
+                  child: Stack(children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: MobileScanner(
+                        scanWindow: scanWindow,
+                        onDetect: (capture) async {
+                          if (_scannerAtivo) return;
+                          final barcodes = capture.barcodes;
+                          if (barcodes.isEmpty) return;
+                          _scannerAtivo = true;
                           final code = barcodes.first.rawValue ?? '';
                           await _play('sounds/beep.mp3');
                           if (!mounted) return;
                           _codigoController.text = code;
                           // ignore: use_build_context_synchronously
-                          Navigator.of(context).pop();
+                          Navigator.of(sheetCtx).pop();
                           _focusNodeCodigo.nextFocus();
-                        }
-                      },
+                        },
+                      ),
                     ),
-                  ),
-                  ColorFiltered(
-                    colorFilter: ColorFilter.mode(
-                        Colors.black.withAlpha(179), BlendMode.srcOut),
-                    child: Stack(children: [
-                      Container(
-                          decoration: const BoxDecoration(
-                              color: Colors.black,
-                              backgroundBlendMode: BlendMode.dstOut)),
-                      Center(
-                        child: Container(
-                          width: scanWindow.width, height: scanWindow.height,
-                          decoration: BoxDecoration(
-                              color: Colors.red,
-                              borderRadius: BorderRadius.circular(16)),
+                    // Overlay de foco do scanner
+                    ColorFiltered(
+                      colorFilter: ColorFilter.mode(
+                          Colors.black.withAlpha(179), BlendMode.srcOut),
+                      child: Stack(children: [
+                        Container(
+                            decoration: const BoxDecoration(
+                                color: Colors.black,
+                                backgroundBlendMode: BlendMode.dstOut)),
+                        Center(
+                          child: Container(
+                            width: scanWindow.width,
+                            height: scanWindow.height,
+                            decoration: BoxDecoration(
+                                color: Colors.red,
+                                borderRadius: BorderRadius.circular(16)),
+                          ),
+                        ),
+                      ]),
+                    ),
+                    Center(
+                      child: Container(
+                        width: scanWindow.width,
+                        height: scanWindow.height,
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                              color: Theme.of(sheetCtx).primaryColor,
+                              width: 3),
+                          borderRadius: BorderRadius.circular(16),
                         ),
                       ),
-                    ]),
-                  ),
-                  Center(
-                    child: Container(
-                      width: scanWindow.width, height: scanWindow.height,
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                            color: Theme.of(context).primaryColor, width: 3),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
                     ),
-                  ),
-                ]),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 24),
-                child: Text('Alinhe o código de barras dentro do quadro',
+                  ]),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Text(
+                    'Alinhe o código de barras dentro do quadro',
                     style: TextStyle(
                         color: Colors.grey.shade600,
-                        fontWeight: FontWeight.w500)),
-              ),
-            ]),
-          ),
-        );
-      }),
+                        fontWeight: FontWeight.w500),
+                  ),
+                ),
+              ]),
+            ),
+          );
+        },
+      ),
     );
   }
 
   Future<void> _salvarContagem() async {
-    final itemCode      = _codigoController.text.trim();
-    final quantidadeStr = _quantidadeController.text.trim();
-    final deposito      = _depositoController.text.trim();
+    final itemCode  = _codigoController.text.trim();
+    final deposito  = _depositoController.text.trim();
+    final quantidade =
+        double.tryParse(_quantidadeController.text.replaceAll(',', '.'));
 
     if (itemCode.isEmpty) {
       await _play('sounds/error_beep.mp3', isError: true);
-      // ignore: use_build_context_synchronously
+      if (!mounted) return;
       StoxSnackbar.aviso(context, 'O código do item é obrigatório.');
       return;
     }
     if (deposito.isEmpty) {
       await _play('sounds/error_beep.mp3', isError: true);
-      // ignore: use_build_context_synchronously
+      if (!mounted) return;
       StoxSnackbar.aviso(context, 'Informe o código do depósito.');
       return;
     }
-    final quantidade =
-        double.tryParse(quantidadeStr.replaceAll(',', '.'));
     if (quantidade == null || quantidade <= 0) {
       await _play('sounds/error_beep.mp3', isError: true);
-      // ignore: use_build_context_synchronously
-      StoxSnackbar.erro(context,
-          'Informe uma quantidade válida e maior que zero.');
+      if (!mounted) return;
+      StoxSnackbar.erro(context, 'Informe uma quantidade válida e maior que zero.');
       return;
     }
 
     final duplicata = _buscarDuplicata(itemCode);
     if (duplicata != null) {
-      final substituir =
-          await _exibirDialogoDuplicata(duplicata, quantidade);
+      final substituir = await _exibirDialogoDuplicata(duplicata, quantidade);
       if (!substituir) return;
       try {
         await DatabaseHelper.instance
             .atualizarContagem(duplicata['id'], quantidade);
         await _play('sounds/check.mp3');
-        // ignore: use_build_context_synchronously
+        if (!mounted) return;
         StoxSnackbar.sucesso(context, 'Contagem de $itemCode atualizada!');
         _codigoController.clear();
         _quantidadeController.text = '1';
@@ -516,7 +524,7 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
         _focusNodeCodigo.requestFocus();
       } catch (e) {
         await _play('sounds/fail.mp3', isFail: true);
-        // ignore: use_build_context_synchronously
+        if (!mounted) return;
         StoxSnackbar.erro(context, 'Erro ao atualizar: $e');
       }
       return;
@@ -529,7 +537,7 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
         warehouseCode: deposito,
       );
       await _play('sounds/check.mp3');
-      // ignore: use_build_context_synchronously
+      if (!mounted) return;
       StoxSnackbar.sucesso(context, 'Item $itemCode salvo com sucesso!');
       _codigoController.clear();
       _quantidadeController.text = '1';
@@ -537,12 +545,12 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
       _focusNodeCodigo.requestFocus();
     } catch (e) {
       await _play('sounds/fail.mp3', isFail: true);
-      // ignore: use_build_context_synchronously
+      if (!mounted) return;
       StoxSnackbar.erro(context, 'Erro ao salvar: $e');
     }
   }
 
-  // ─── EDIÇÃO ──────────────────────────────────────────────────────────────
+  // ── Edição ────────────────────────────────────────────────────────────────
 
   void _abrirEdicao(Map<String, dynamic> item) {
     HapticFeedback.selectionClick();
@@ -554,7 +562,7 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (dialogCtx, setDialogState) => AlertDialog(
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Text('Editar: ${item['itemCode']}',
@@ -566,7 +574,6 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
                   style:
                       TextStyle(color: Colors.grey.shade600, fontSize: 13)),
               const SizedBox(height: 10),
-              // Seletor de quantidade inline
               StoxCard(
                 child: Row(children: [
                   IconButton(
@@ -617,7 +624,7 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
           actions: [
             StoxTextButton(
               label: 'CANCELAR',
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.pop(dialogCtx),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
@@ -633,13 +640,13 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
 
                 if (novaQtd <= 0) {
                   await _play('sounds/error_beep.mp3', isError: true);
-                  // ignore: use_build_context_synchronously
+                  if (!mounted) return;
                   StoxSnackbar.erro(context, 'Quantidade inválida.');
                   return;
                 }
                 if (novoDeposito.isEmpty) {
                   await _play('sounds/error_beep.mp3', isError: true);
-                  // ignore: use_build_context_synchronously
+                  if (!mounted) return;
                   StoxSnackbar.aviso(context, 'Informe o depósito.');
                   return;
                 }
@@ -653,18 +660,17 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
                     'dataHora':      DateTime.now().toIso8601String(),
                     'syncStatus':    0,
                   },
-                  where: 'id = ?',
+                  where:     'id = ?',
                   whereArgs: [item['id']],
                 );
 
-                if (mounted) {
-                  await _play('sounds/check.mp3');
-                  // ignore: use_build_context_synchronously
-                  Navigator.pop(context);
-                  await _carregarContagens();
-                  // ignore: use_build_context_synchronously
-                  StoxSnackbar.sucesso(context, 'Contagem atualizada!');
-                }
+                await _play('sounds/check.mp3');
+                if (!mounted) return;
+                // ignore: use_build_context_synchronously
+                Navigator.pop(dialogCtx);
+                await _carregarContagens();
+                // ignore: use_build_context_synchronously
+                StoxSnackbar.sucesso(context, 'Contagem atualizada!');
               },
               child: const Text('SALVAR'),
             ),
@@ -674,7 +680,7 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
     );
   }
 
-  // ─── BUILD ───────────────────────────────────────────────────────────────
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -696,31 +702,8 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (!_modoSelecao) ...[
-                  // Banner modo offline
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.blue.shade100),
-                    ),
-                    child: Row(children: [
-                      Icon(Icons.wifi_off_rounded, color: theme.primaryColor),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Modo Offline: Os dados ficam salvos localmente no aparelho.',
-                          style: TextStyle(
-                              color: theme.primaryColor,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500),
-                        ),
-                      ),
-                    ]),
-                  ),
+                  _buildBannerOffline(theme),
                   const SizedBox(height: 24),
-
-                  // Código do item
                   StoxTextField(
                     controller: _codigoController,
                     labelText: 'Código do Item',
@@ -731,13 +714,13 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
-                          tooltip: 'Ler com IA (Foto/Texto)',
+                          tooltip: 'Ler com IA',
                           icon: Icon(Icons.auto_awesome_rounded,
                               color: theme.primaryColor),
                           onPressed: _escanearComIA,
                         ),
                         IconButton(
-                          tooltip: 'Ler Código de Barras',
+                          tooltip: 'Escanear código de barras',
                           icon: Icon(Icons.qr_code_scanner_rounded,
                               color: theme.primaryColor),
                           onPressed: _abrirScanner,
@@ -746,8 +729,6 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
                     ),
                   ),
                   const SizedBox(height: 16),
-
-                  // Depósito
                   StoxTextField(
                     controller: _depositoController,
                     labelText: 'Depósito',
@@ -757,10 +738,8 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
                     helperText: 'Código do depósito para esta contagem.',
                   ),
                   const SizedBox(height: 16),
-
                   _buildQuantidadeSelector(),
                   const SizedBox(height: 32),
-
                   StoxButton(
                     label: 'SALVAR CONTAGEM',
                     icon: Icons.save_rounded,
@@ -768,46 +747,7 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
                   ),
                   const SizedBox(height: 40),
                 ],
-
-                // Cabeçalho histórico
-                Row(children: [
-                  Icon(
-                    _modoSelecao
-                        ? Icons.checklist_rounded
-                        : Icons.history_rounded,
-                    color: _modoSelecao ? theme.primaryColor : Colors.grey,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    _modoSelecao
-                        ? '${_selecionados.length} selecionado${_selecionados.length != 1 ? 's' : ''}'
-                        : 'Histórico Recente',
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        color: _modoSelecao
-                            ? theme.primaryColor
-                            : Colors.black87),
-                  ),
-                  const Spacer(),
-                  if (!_modoSelecao)
-                    Text('Segure para selecionar',
-                        style: TextStyle(
-                            fontSize: 12, color: Colors.grey.shade500)),
-                  if (_modoSelecao)
-                    TextButton(
-                      onPressed: _selecionarTodos,
-                      child: Text(
-                        _selecionados.length == _contagens.length
-                            ? 'Desmarcar todos'
-                            : 'Selecionar todos',
-                        style: TextStyle(
-                            color: theme.primaryColor,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 13),
-                      ),
-                    ),
-                ]),
+                _buildCabecalhoHistorico(theme),
                 const SizedBox(height: 12),
                 _buildListaContagens(),
                 if (_modoSelecao) const SizedBox(height: 80),
@@ -829,6 +769,8 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
     );
   }
 
+  // ── Subwidgets do Build ───────────────────────────────────────────────────
+
   AppBar _buildAppBarNormal() => AppBar(
         title: const Text('Contagem Offline'),
         actions: [
@@ -843,8 +785,8 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
   AppBar _buildAppBarSelecao(ThemeData theme) => AppBar(
         leading: IconButton(
           icon: const Icon(Icons.close_rounded),
-          onPressed: _sairModoSelecao,
           tooltip: 'Cancelar seleção',
+          onPressed: _sairModoSelecao,
         ),
         title: Text(
             '${_selecionados.length} selecionado${_selecionados.length != 1 ? 's' : ''}'),
@@ -857,53 +799,106 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
         ],
       );
 
-  Widget _buildQuantidadeSelector() {
-    return StoxCard(
-      child: Row(children: [
-        InkWell(
-          onTap: () => _ajustarQuantidade(-1),
-          borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(12),
-              bottomLeft: Radius.circular(12)),
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            child: Icon(Icons.remove_rounded,
-                color: Colors.red.shade600, size: 28),
-          ),
+  Widget _buildBannerOffline(ThemeData theme) => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.blue.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.blue.shade100),
         ),
-        Expanded(
-          child: TextField(
-            controller: _quantidadeController,
-            textAlign: TextAlign.center,
-            keyboardType:
-                const TextInputType.numberWithOptions(decimal: true),
-            onTap: () => HapticFeedback.selectionClick(),
-            decoration: const InputDecoration(
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              fillColor: Colors.transparent,
-              filled: false,
-              contentPadding: EdgeInsets.zero,
+        child: Row(children: [
+          Icon(Icons.wifi_off_rounded, color: theme.primaryColor),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Modo Offline: os dados ficam salvos localmente no aparelho.',
+              style: TextStyle(
+                  color: theme.primaryColor,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500),
             ),
-            style:
-                const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
           ),
+        ]),
+      );
+
+  Widget _buildCabecalhoHistorico(ThemeData theme) => Row(children: [
+        Icon(
+          _modoSelecao ? Icons.checklist_rounded : Icons.history_rounded,
+          color: _modoSelecao ? theme.primaryColor : Colors.grey,
         ),
-        InkWell(
-          onTap: () => _ajustarQuantidade(1),
-          borderRadius: const BorderRadius.only(
-              topRight: Radius.circular(12),
-              bottomRight: Radius.circular(12)),
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            child: Icon(Icons.add_rounded,
-                color: Colors.green.shade600, size: 28),
+        const SizedBox(width: 8),
+        Text(
+          _modoSelecao
+              ? '${_selecionados.length} selecionado${_selecionados.length != 1 ? 's' : ''}'
+              : 'Histórico Recente',
+          style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
+              color: _modoSelecao ? theme.primaryColor : Colors.black87),
+        ),
+        const Spacer(),
+        if (!_modoSelecao)
+          Text('Segure para selecionar',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+        if (_modoSelecao)
+          TextButton(
+            onPressed: _selecionarTodos,
+            child: Text(
+              _selecionados.length == _contagens.length
+                  ? 'Desmarcar todos'
+                  : 'Selecionar todos',
+              style: TextStyle(
+                  color: theme.primaryColor,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13),
+            ),
           ),
-        ),
-      ]),
-    );
-  }
+      ]);
+
+  Widget _buildQuantidadeSelector() => StoxCard(
+        child: Row(children: [
+          InkWell(
+            onTap: () => _ajustarQuantidade(-1),
+            borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(12),
+                bottomLeft: Radius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Icon(Icons.remove_rounded,
+                  color: Colors.red.shade600, size: 28),
+            ),
+          ),
+          Expanded(
+            child: TextField(
+              controller: _quantidadeController,
+              textAlign: TextAlign.center,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              onTap: () => HapticFeedback.selectionClick(),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                fillColor: Colors.transparent,
+                filled: false,
+                contentPadding: EdgeInsets.zero,
+              ),
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+          ),
+          InkWell(
+            onTap: () => _ajustarQuantidade(1),
+            borderRadius: const BorderRadius.only(
+                topRight: Radius.circular(12),
+                bottomRight: Radius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Icon(Icons.add_rounded,
+                  color: Colors.green.shade600, size: 28),
+            ),
+          ),
+        ]),
+      );
 
   Widget _buildListaContagens() {
     if (_contagens.isEmpty) {
@@ -924,7 +919,7 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: _contagens.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
         final item        = _contagens[index];
         final syncStatus  = item['syncStatus'] ?? 0;
@@ -937,9 +932,7 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: selecionado
-                  ? Colors.red.shade400
-                  : Colors.grey.shade300,
+              color: selecionado ? Colors.red.shade400 : Colors.grey.shade300,
               width: selecionado ? 2 : 1,
             ),
             color: selecionado ? Colors.red.shade50 : Colors.white,
@@ -963,9 +956,8 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
                       syncStatus == 1
                           ? Icons.cloud_done_rounded
                           : Icons.cloud_upload_rounded,
-                      color: syncStatus == 1
-                          ? Colors.green
-                          : Colors.orange,
+                      color:
+                          syncStatus == 1 ? Colors.green : Colors.orange,
                       size: 20,
                     ),
                   ),
@@ -974,17 +966,14 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
               style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
-                  color: selecionado
-                      ? Colors.red.shade700
-                      : Colors.black87),
+                  color: selecionado ? Colors.red.shade700 : Colors.black87),
             ),
             subtitle: Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(
                 'Qtd: ${item['quantidade']}  •  Dep: $deposito',
                 style: TextStyle(
-                    color: Colors.grey.shade700,
-                    fontWeight: FontWeight.w500),
+                    color: Colors.grey.shade700, fontWeight: FontWeight.w500),
               ),
             ),
             trailing: _modoSelecao
@@ -1003,12 +992,13 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
   }
 }
 
-// ─── DIÁLOGO DE CONFIRMAÇÃO DE EXCLUSÃO ─────────────────────────────────────
+// ── Diálogo de confirmação de exclusão ───────────────────────────────────────
 
+/// Exige digitação de "EXCLUIR" quando a seleção tem 3 ou mais itens.
 class _DialogoConfirmacaoExclusao extends StatefulWidget {
-  final int quantidade;
-  final bool isTodosItens;
-  final List<Map<String, dynamic>> itens;
+  final int                         quantidade;
+  final bool                        isTodosItens;
+  final List<Map<String, dynamic>>  itens;
 
   const _DialogoConfirmacaoExclusao({
     required this.quantidade,
@@ -1024,7 +1014,7 @@ class _DialogoConfirmacaoExclusao extends StatefulWidget {
 class _DialogoConfirmacaoExclusaoState
     extends State<_DialogoConfirmacaoExclusao> {
   final _confirmController = TextEditingController();
-  bool _confirmacaoValida  = false;
+  bool  _confirmacaoValida = false;
 
   bool get _exigeDigitacao => widget.quantidade >= 3;
 
@@ -1049,7 +1039,7 @@ class _DialogoConfirmacaoExclusaoState
 
   @override
   Widget build(BuildContext context) {
-    final botaoHabilitado = !_exigeDigitacao || _confirmacaoValida;
+    final habilitado = !_exigeDigitacao || _confirmacaoValida;
 
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -1069,8 +1059,7 @@ class _DialogoConfirmacaoExclusaoState
             widget.isTodosItens
                 ? 'Excluir toda a contagem'
                 : 'Excluir ${widget.quantidade} ${widget.quantidade == 1 ? 'item' : 'itens'}',
-            style:
-                const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
         ),
       ]),
@@ -1093,13 +1082,12 @@ class _DialogoConfirmacaoExclusaoState
                           children: [
                             Text(item['itemCode'],
                                 style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 13)),
+                                    fontWeight: FontWeight.w600, fontSize: 13)),
                             Text(
-                                'Qtd: ${item['quantidade']}  •  Dep: ${item['warehouseCode'] ?? '01'}',
-                                style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey.shade600)),
+                              'Qtd: ${item['quantidade']}  •  Dep: ${item['warehouseCode'] ?? '01'}',
+                              style: TextStyle(
+                                  fontSize: 12, color: Colors.grey.shade600),
+                            ),
                           ],
                         ),
                       )),
@@ -1113,11 +1101,13 @@ class _DialogoConfirmacaoExclusaoState
               ),
             ),
             const SizedBox(height: 16),
-            Text('Esta ação não pode ser desfeita.',
-                style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey.shade700,
-                    fontWeight: FontWeight.w500)),
+            Text(
+              'Esta ação não pode ser desfeita.',
+              style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey.shade700,
+                  fontWeight: FontWeight.w500),
+            ),
             if (_exigeDigitacao) ...[
               const SizedBox(height: 16),
               Container(
@@ -1166,23 +1156,23 @@ class _DialogoConfirmacaoExclusaoState
           onPressed: () => Navigator.pop(context, false),
         ),
         ElevatedButton.icon(
-          onPressed: botaoHabilitado
+          onPressed: habilitado
               ? () {
                   HapticFeedback.heavyImpact();
                   Navigator.pop(context, true);
                 }
               : null,
           icon: const Icon(Icons.delete_rounded, size: 16),
-          label: Text('EXCLUIR ${widget.quantidade}',
-              style: const TextStyle(
-                  fontWeight: FontWeight.bold, fontSize: 13)),
+          label: Text(
+            'EXCLUIR ${widget.quantidade}',
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+          ),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red.shade600,
             foregroundColor: Colors.white,
             disabledBackgroundColor: Colors.grey.shade300,
             disabledForegroundColor: Colors.grey.shade500,
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(8)),

@@ -12,6 +12,10 @@ import 'contador_offline_page.dart';
 import 'api_config_page.dart';
 import 'item_search_page.dart';
 
+/// Painel principal do STOX.
+///
+/// Exibe as contagens offline pendentes, permite sincronizar com o
+/// SAP Business One e navega para as demais telas via Drawer.
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -20,10 +24,10 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  List<Map<String, dynamic>> _contagensOffline = [];
-  bool _carregando = false;
-  String _nomeOperador = 'Operador...';
-  final AudioPlayer _audio = AudioPlayer();
+  List<Map<String, dynamic>> _contagens    = [];
+  bool                       _carregando   = false;
+  String                     _nomeOperador = 'Operador...';
+  final _audio = AudioPlayer();
 
   @override
   void initState() {
@@ -37,12 +41,13 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  // ─── FEEDBACK ──────────────────────────────────────────────────────────────
+  // ── Feedback ─────────────────────────────────────────────────────────────
 
   Future<void> _play(String asset,
       {bool isError = false, bool isFail = false}) async {
     try {
-      if (await Vibration.hasVibrator()) {
+      final temVibrador = await Vibration.hasVibrator();
+      if (temVibrador) {
         if (isFail) {
           Vibration.vibrate(pattern: [0, 400, 100, 400]);
         } else if (isError) {
@@ -51,52 +56,48 @@ class _HomePageState extends State<HomePage> {
           Vibration.vibrate(duration: 300);
         }
       } else {
-        if (isFail || isError) {
-          HapticFeedback.vibrate();
-        } else {
-          HapticFeedback.heavyImpact();
-        }
+        (isFail || isError)
+            ? HapticFeedback.vibrate()
+            : HapticFeedback.heavyImpact();
       }
       await _audio.play(AssetSource(asset));
     } catch (e) {
-      debugPrint('Feedback error: $e');
+      debugPrint('HomePage._play: $e');
     }
   }
 
-  // ─── DADOS ─────────────────────────────────────────────────────────────────
+  // ── Dados ─────────────────────────────────────────────────────────────────
 
   Future<void> _carregarDadosIniciais() async {
-    await Future.wait([_carregarDadosLocais(), _carregarUsuario()]);
+    await Future.wait([_carregarContagens(), _carregarUsuario()]);
   }
 
   Future<void> _carregarUsuario() async {
     final prefs = await SharedPreferences.getInstance();
-    if (mounted) {
-      setState(() {
-        _nomeOperador = prefs.getString('UserName') ?? 'Operador STOX';
-      });
-    }
+    if (!mounted) return;
+    setState(() => _nomeOperador = prefs.getString('UserName') ?? 'Operador STOX');
   }
 
-  Future<void> _carregarDadosLocais() async {
+  Future<void> _carregarContagens() async {
     final dados = await DatabaseHelper.instance.buscarContagens();
-    if (mounted) setState(() => _contagensOffline = dados);
+    if (!mounted) return;
+    setState(() => _contagens = dados);
   }
 
-  // ─── SINCRONIZAÇÃO ──────────────────────────────────────────────────────────
+  // ── Sincronização ─────────────────────────────────────────────────────────
 
   Future<void> _sincronizarComSAP() async {
-    if (_contagensOffline.isEmpty) return;
+    if (_contagens.isEmpty) return;
     HapticFeedback.lightImpact();
     setState(() => _carregando = true);
 
     try {
-      final erro = await SapService.postInventoryCounting(_contagensOffline);
+      final erro = await SapService.postInventoryCounting(_contagens);
 
       if (erro == null) {
         await _play('sounds/check.mp3');
         await DatabaseHelper.instance.limparContagens();
-        await _carregarDadosLocais();
+        await _carregarContagens();
         if (!mounted) return;
         StoxSnackbar.sucesso(context, 'Sincronização concluída com sucesso!');
       } else {
@@ -107,15 +108,16 @@ class _HomePageState extends State<HomePage> {
     } catch (e) {
       await _play('sounds/fail.mp3', isFail: true);
       if (!mounted) return;
-      StoxSnackbar.erro(context,
-          'Sem conexão com o servidor SAP. Tente novamente.');
+      StoxSnackbar.erro(context, 'Sem conexão com o servidor SAP. Tente novamente.');
     } finally {
       if (mounted) setState(() => _carregando = false);
     }
   }
 
-  // ─── ERROS SAP ──────────────────────────────────────────────────────────────
+  // ── Erros SAP ─────────────────────────────────────────────────────────────
 
+  /// Classifica a mensagem de erro bruta do SAP em uma categoria amigável
+  /// usando um sistema de pontuação por palavras-chave.
   _ErroSap _interpretarErroSap(String mensagemBruta) {
     final msg     = mensagemBruta.toUpperCase();
     final tecnico = mensagemBruta.length > 300
@@ -124,16 +126,16 @@ class _HomePageState extends State<HomePage> {
 
     String itemEncontrado     = '';
     String depositoEncontrado = '';
-    for (var c in _contagensOffline) {
-      final codigo   = c['itemCode'].toString().trim().toUpperCase();
-      final deposito = c['warehouseCode']?.toString().trim() ?? '';
+    for (final c in _contagens) {
+      final codigo = c['itemCode'].toString().trim().toUpperCase();
       if (msg.contains(codigo)) {
         itemEncontrado     = c['itemCode'].toString().trim();
-        depositoEncontrado = deposito;
+        depositoEncontrado = c['warehouseCode']?.toString().trim() ?? '';
         break;
       }
     }
 
+    // Contagem já aberta
     if (mensagemBruta.contains('-1310') ||
         mensagemBruta.contains('1470000497') ||
         msg.contains('ALREADY')) {
@@ -142,17 +144,16 @@ class _HomePageState extends State<HomePage> {
         cor: Colors.orange.shade700,
         titulo: 'Contagem já aberta no SAP',
         mensagem: itemEncontrado.isNotEmpty
-            ? 'O item "$itemEncontrado" já possui uma contagem de inventário aberta e não finalizada no SAP Business One.'
-            : 'Um dos itens já possui uma contagem de inventário aberta e não finalizada no SAP.',
+            ? 'O item "$itemEncontrado" já possui uma contagem aberta e não finalizada no SAP Business One.'
+            : 'Um dos itens já possui uma contagem aberta e não finalizada no SAP.',
         orientacao:
-            'Acesse o SAP Business One → Estoque → Contagem de Estoque, finalize ou cancele a contagem existente e sincronize novamente.',
+            'Acesse SAP Business One → Estoque → Contagem de Estoque, finalize ou cancele a contagem existente e sincronize novamente.',
         codigoTecnico: tecnico,
       );
     }
 
-    if (msg.contains('SESSION') ||
-        msg.contains('401') ||
-        msg.contains('UNAUTHORIZED')) {
+    // Sessão expirada
+    if (msg.contains('SESSION') || msg.contains('401') || msg.contains('UNAUTHORIZED')) {
       return _ErroSap(
         icone: Icons.lock_rounded,
         cor: Colors.red.shade700,
@@ -164,9 +165,8 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    if (msg.contains('TIMEOUT') ||
-        msg.contains('CONNECTION') ||
-        msg.contains('SOCKET')) {
+    // Falha de rede
+    if (msg.contains('TIMEOUT') || msg.contains('CONNECTION') || msg.contains('SOCKET')) {
       return _ErroSap(
         icone: Icons.wifi_off_rounded,
         cor: Colors.red.shade700,
@@ -177,26 +177,27 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
+    // Pontuação por palavras-chave para classificar item vs depósito
     int pontoItem     = 0;
     int pontoDeposito = 0;
 
-    if (msg.contains('-4002'))                             pontoItem += 10;
-    if (msg.contains('ITEM NOT FOUND'))                    pontoItem += 8;
-    if (msg.contains('INVALID ITEM'))                      pontoItem += 8;
-    if (msg.contains('ITEM') && msg.contains('NOT EXIST')) pontoItem += 7;
-    if (msg.contains('ITEM') && msg.contains('NOT FOUND')) pontoItem += 6;
-    if (msg.contains('ITEM') && msg.contains('INVALID'))   pontoItem += 5;
-    if (msg.contains('ITEM CODE'))                         pontoItem += 4;
-    if (msg.contains('ITEM') && msg.contains('UNKNOWN'))   pontoItem += 4;
-    if (itemEncontrado.isNotEmpty)                         pontoItem += 3;
+    if (msg.contains('-4002'))                              pontoItem += 10;
+    if (msg.contains('ITEM NOT FOUND'))                     pontoItem += 8;
+    if (msg.contains('INVALID ITEM'))                       pontoItem += 8;
+    if (msg.contains('ITEM') && msg.contains('NOT EXIST'))  pontoItem += 7;
+    if (msg.contains('ITEM') && msg.contains('NOT FOUND'))  pontoItem += 6;
+    if (msg.contains('ITEM') && msg.contains('INVALID'))    pontoItem += 5;
+    if (msg.contains('ITEM CODE'))                          pontoItem += 4;
+    if (msg.contains('ITEM') && msg.contains('UNKNOWN'))    pontoItem += 4;
+    if (itemEncontrado.isNotEmpty)                          pontoItem += 3;
 
-    if (msg.contains('-5002'))                                      pontoDeposito += 10;
-    if (msg.contains('WAREHOUSE NOT FOUND'))                        pontoDeposito += 8;
-    if (msg.contains('INVALID WAREHOUSE'))                          pontoDeposito += 8;
-    if (msg.contains('WAREHOUSE') && msg.contains('NOT FOUND'))     pontoDeposito += 6;
-    if (msg.contains('WAREHOUSE') && msg.contains('INVALID'))       pontoDeposito += 5;
-    if (msg.contains('WAREHOUSECODE') && msg.contains('NOT FOUND')) pontoDeposito += 6;
-    if (msg.contains('WAREHOUSE') && pontoDeposito == 0)            pontoDeposito += 1;
+    if (msg.contains('-5002'))                                       pontoDeposito += 10;
+    if (msg.contains('WAREHOUSE NOT FOUND'))                         pontoDeposito += 8;
+    if (msg.contains('INVALID WAREHOUSE'))                           pontoDeposito += 8;
+    if (msg.contains('WAREHOUSE') && msg.contains('NOT FOUND'))      pontoDeposito += 6;
+    if (msg.contains('WAREHOUSE') && msg.contains('INVALID'))        pontoDeposito += 5;
+    if (msg.contains('WAREHOUSECODE') && msg.contains('NOT FOUND'))  pontoDeposito += 6;
+    if (msg.contains('WAREHOUSE') && pontoDeposito == 0)             pontoDeposito += 1;
 
     if (pontoItem > pontoDeposito && pontoItem > 0) {
       return _ErroSap(
@@ -204,7 +205,7 @@ class _HomePageState extends State<HomePage> {
         cor: Colors.orange.shade700,
         titulo: 'Item não encontrado no SAP',
         mensagem: itemEncontrado.isNotEmpty
-            ? 'O item "$itemEncontrado" não existe no cadastro do SAP Business One. O código digitado pode estar incorreto.'
+            ? 'O item "$itemEncontrado" não existe no cadastro do SAP Business One.'
             : 'Um dos itens da contagem não existe no cadastro do SAP Business One.',
         orientacao:
             'Corrija o código do item na tela de contagem e sincronize novamente.',
@@ -218,23 +219,24 @@ class _HomePageState extends State<HomePage> {
         cor: Colors.orange.shade700,
         titulo: 'Erro ao enviar contagem',
         mensagem: depositoEncontrado.isNotEmpty
-            ? 'O SAP recusou o item "$depositoEncontrado". Confirme se o código do item foi digitado corretamente e se o depósito está configurado certo.'
-            : 'O SAP recusou um ou mais itens da contagem. Confirme se os códigos dos itens foram digitados corretamente e se o depósito está configurado certo.',
+            ? 'O SAP recusou o item com depósito "$depositoEncontrado". Confirme se o código e o depósito estão corretos.'
+            : 'O SAP recusou um ou mais itens. Confirme os códigos e o depósito configurado.',
         orientacao:
-            'Verifique o retorno do SAP abaixo para identificar a causa exata. Corrija o problema e sincronize novamente.',
+            'Verifique o retorno técnico abaixo, corrija o problema e sincronize novamente.',
         codigoTecnico: tecnico,
       );
     }
 
+    // Fallback genérico
     return _ErroSap(
       icone: Icons.error_outline_rounded,
       cor: Colors.red.shade700,
       titulo: 'Erro na sincronização',
       mensagem: itemEncontrado.isNotEmpty
-          ? 'Ocorreu um erro ao processar o item "$itemEncontrado". Veja o detalhe técnico abaixo.'
-          : 'Ocorreu um erro ao enviar os dados para o SAP Business One. Veja o detalhe técnico abaixo.',
+          ? 'Ocorreu um erro ao processar o item "$itemEncontrado".'
+          : 'Ocorreu um erro ao enviar os dados para o SAP Business One.',
       orientacao:
-          'Anote a mensagem de erro abaixo e entre em contato com o administrador do SAP caso o problema persista.',
+          'Anote a mensagem de erro abaixo e contate o administrador do SAP se o problema persistir.',
       codigoTecnico: tecnico,
     );
   }
@@ -274,7 +276,6 @@ class _HomePageState extends State<HomePage> {
               Text(erro.mensagem,
                   style: const TextStyle(fontSize: 14, height: 1.5)),
               const SizedBox(height: 16),
-              // Orientação
               StoxCard(
                 padding: const EdgeInsets.all(12),
                 child: Row(
@@ -293,7 +294,6 @@ class _HomePageState extends State<HomePage> {
                   ],
                 ),
               ),
-              // Retorno técnico do SAP
               if (erro.codigoTecnico != null) ...[
                 const SizedBox(height: 12),
                 Text('Retorno do SAP:',
@@ -351,17 +351,16 @@ class _HomePageState extends State<HomePage> {
                   borderRadius: BorderRadius.circular(8)),
             ),
             child: Text(
-                erro.titulo.contains('expirada')
-                    ? 'FAZER LOGIN'
-                    : 'ENTENDIDO',
-                style: const TextStyle(fontWeight: FontWeight.bold)),
+              erro.titulo.contains('expirada') ? 'FAZER LOGIN' : 'ENTENDIDO',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
           ),
         ],
       ),
     );
   }
 
-  // ─── BUILD ─────────────────────────────────────────────────────────────────
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -373,101 +372,99 @@ class _HomePageState extends State<HomePage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
+            tooltip: 'Recarregar',
             onPressed: () {
               HapticFeedback.lightImpact();
-              _carregarDadosLocais();
+              _carregarContagens();
             },
-            tooltip: 'Recarregar Dados',
           ),
         ],
       ),
       drawer: _buildDrawer(),
       body: SafeArea(
         child: Column(children: [
-          // Card de resumo com botão de sincronização
           StoxSummaryCard(
-            totalItens: _contagensOffline.length,
-            carregando: _carregando,
+            totalItens:   _contagens.length,
+            carregando:   _carregando,
             onSincronizar: _sincronizarComSAP,
           ),
           Expanded(
-            child: _contagensOffline.isEmpty
+            child: _contagens.isEmpty
                 ? _buildEmptyState()
-                : _buildContagensList(),
+                : _buildListaContagens(),
           ),
         ]),
       ),
     );
   }
 
-  Widget _buildContagensList() {
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 80),
-      itemCount: _contagensOffline.length,
-      itemBuilder: (context, index) {
-        final item     = _contagensOffline[index];
-        final deposito = item['warehouseCode'] ?? '01';
+  // ── Subwidgets do Build ───────────────────────────────────────────────────
 
-        return StoxCard(
-          child: ListTile(
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            leading: CircleAvatar(
-              backgroundColor:
-                  Theme.of(context).primaryColor.withAlpha(26),
-              radius: 22,
-              child: Icon(Icons.inventory_2_rounded,
-                  color: Theme.of(context).primaryColor, size: 22),
-            ),
-            title: Text('${item['itemCode']}',
-                style: const TextStyle(
-                    fontWeight: FontWeight.bold, fontSize: 16)),
-            subtitle: Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
+  Widget _buildListaContagens() => ListView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 24, 16, 80),
+        itemCount: _contagens.length,
+        itemBuilder: (context, index) {
+          final item     = _contagens[index];
+          final deposito = item['warehouseCode'] ?? '01';
+
+          return StoxCard(
+            child: ListTile(
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              leading: CircleAvatar(
+                backgroundColor: Theme.of(context).primaryColor.withAlpha(26),
+                radius: 22,
+                child: Icon(Icons.inventory_2_rounded,
+                    color: Theme.of(context).primaryColor, size: 22),
+              ),
+              title: Text(
+                '${item['itemCode']}',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
                   'Qtd: ${item['quantidade']}  •  Dep: $deposito',
-                  style: TextStyle(color: Colors.grey.shade700)),
+                  style: TextStyle(color: Colors.grey.shade700),
+                ),
+              ),
+              trailing: IconButton(
+                icon: Icon(Icons.delete_outline_rounded,
+                    color: Colors.red.shade400),
+                onPressed: () async {
+                  HapticFeedback.vibrate();
+                  await DatabaseHelper.instance.excluirContagem(item['id']);
+                  _carregarContagens();
+                },
+              ),
             ),
-            trailing: IconButton(
-              icon: Icon(Icons.delete_outline_rounded,
-                  color: Colors.red.shade400),
-              onPressed: () async {
-                HapticFeedback.vibrate();
-                await DatabaseHelper.instance.excluirContagem(item['id']);
-                _carregarDadosLocais();
-              },
-            ),
-          ),
-        );
-      },
-    );
-  }
+          );
+        },
+      );
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-                color: Colors.green.shade50, shape: BoxShape.circle),
-            child: Icon(Icons.cloud_done_rounded,
-                size: 64, color: Colors.green.shade400),
-          ),
-          const SizedBox(height: 24),
-          Text('Tudo sincronizado!',
-              style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey.shade800)),
-          const SizedBox(height: 8),
-          Text('Não há contagens pendentes para envio.',
-              style: TextStyle(color: Colors.grey.shade600)),
-        ],
-      ),
-    );
-  }
+  Widget _buildEmptyState() => Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                  color: Colors.green.shade50, shape: BoxShape.circle),
+              child: Icon(Icons.cloud_done_rounded,
+                  size: 64, color: Colors.green.shade400),
+            ),
+            const SizedBox(height: 24),
+            Text('Tudo sincronizado!',
+                style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey.shade800)),
+            const SizedBox(height: 8),
+            Text('Não há contagens pendentes para envio.',
+                style: TextStyle(color: Colors.grey.shade600)),
+          ],
+        ),
+      );
 
   Widget _buildDrawer() {
     final theme = Theme.of(context);
@@ -503,7 +500,7 @@ class _HomePageState extends State<HomePage> {
                     context,
                     MaterialPageRoute(
                         builder: (_) => const ContadorOfflinePage()),
-                  ).then((_) => _carregarDadosLocais());
+                  ).then((_) => _carregarContagens());
                 },
               ),
               ListTile(
@@ -519,9 +516,9 @@ class _HomePageState extends State<HomePage> {
                   );
                 },
               ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16),
-                child: Divider(),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Divider(color: Colors.grey.shade200),
               ),
               ListTile(
                 leading: Icon(Icons.settings_rounded,
@@ -546,8 +543,7 @@ class _HomePageState extends State<HomePage> {
         ListTile(
           leading: const Icon(Icons.logout_rounded, color: Colors.red),
           title: const Text('Sair da Conta',
-              style:
-                  TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
           onTap: () async {
             HapticFeedback.heavyImpact();
             await SapService.logout();
@@ -565,15 +561,17 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// ─── MODELO DE ERRO AMIGÁVEL ──────────────────────────────────────────────────
+// ── Modelo de erro amigável ───────────────────────────────────────────────────
 
+/// Encapsula os dados de exibição de um erro de sincronização SAP.
+/// Produzido por [_interpretarErroSap] e consumido por [_exibirErroSap].
 class _ErroSap {
   final IconData icone;
-  final Color cor;
-  final String titulo;
-  final String mensagem;
-  final String orientacao;
-  final String? codigoTecnico;
+  final Color    cor;
+  final String   titulo;
+  final String   mensagem;
+  final String   orientacao;
+  final String?  codigoTecnico;
 
   const _ErroSap({
     required this.icone,

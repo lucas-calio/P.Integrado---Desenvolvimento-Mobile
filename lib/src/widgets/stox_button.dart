@@ -1,24 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// Botão primário padrão do STOX.
-/// Substitui todos os ElevatedButton das telas.
+/// Botão primário do STOX — substitui [ElevatedButton] nas telas.
+///
+/// Exibe um [CircularProgressIndicator] quando [loading] é `true`
+/// e desabilita o toque automaticamente.
 class StoxButton extends StatelessWidget {
-  final String label;
+  final String        label;
   final VoidCallback? onPressed;
-  final bool loading;
-  final IconData? icon;
-  final Color? backgroundColor;
-  final double height;
+  final bool          loading;
+  final IconData?     icon;
+  final Color?        backgroundColor;
+  final double        height;
 
   const StoxButton({
     super.key,
     required this.label,
     this.onPressed,
-    this.loading = false,
+    this.loading         = false,
     this.icon,
     this.backgroundColor,
-    this.height = 54,
+    this.height          = 54,
   });
 
   @override
@@ -27,10 +29,12 @@ class StoxButton extends StatelessWidget {
       width: double.infinity,
       height: height,
       child: ElevatedButton(
-        onPressed: loading ? null : () {
-          HapticFeedback.lightImpact();
-          onPressed?.call();
-        },
+        onPressed: loading
+            ? null
+            : () {
+                HapticFeedback.lightImpact();
+                onPressed?.call();
+              },
         style: ElevatedButton.styleFrom(
           backgroundColor: backgroundColor,
           shape: RoundedRectangleBorder(
@@ -38,9 +42,11 @@ class StoxButton extends StatelessWidget {
         ),
         child: loading
             ? const SizedBox(
-                width: 24, height: 24,
+                width: 24,
+                height: 24,
                 child: CircularProgressIndicator(
-                    color: Colors.white, strokeWidth: 2.5))
+                    color: Colors.white, strokeWidth: 2.5),
+              )
             : icon != null
                 ? Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -58,13 +64,13 @@ class StoxButton extends StatelessWidget {
   }
 }
 
-/// Botão secundário (outlined) padrão do STOX.
+/// Botão secundário do STOX — substitui [OutlinedButton] nas telas.
 class StoxOutlinedButton extends StatelessWidget {
-  final String label;
+  final String        label;
   final VoidCallback? onPressed;
-  final IconData? icon;
-  final Color? foregroundColor;
-  final double height;
+  final IconData?     icon;
+  final Color?        foregroundColor;
+  final double        height;
 
   const StoxOutlinedButton({
     super.key,
@@ -109,12 +115,13 @@ class StoxOutlinedButton extends StatelessWidget {
   }
 }
 
-/// Botão de ação destrutiva (ex: excluir, limpar).
+/// Botão de ação destrutiva (excluir, limpar).
+/// Atalho para [StoxOutlinedButton] com cor vermelha.
 class StoxDestructiveButton extends StatelessWidget {
-  final String label;
+  final String        label;
   final VoidCallback? onPressed;
-  final IconData? icon;
-  final double height;
+  final IconData?     icon;
+  final double        height;
 
   const StoxDestructiveButton({
     super.key,
@@ -125,23 +132,21 @@ class StoxDestructiveButton extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    return StoxOutlinedButton(
-      label: label,
-      onPressed: onPressed,
-      icon: icon,
-      foregroundColor: Colors.red.shade600,
-      height: height,
-    );
-  }
+  Widget build(BuildContext context) => StoxOutlinedButton(
+        label:           label,
+        onPressed:       onPressed,
+        icon:            icon,
+        foregroundColor: Colors.red.shade600,
+        height:          height,
+      );
 }
 
-/// Botão de texto simples (ações secundárias, links).
+/// Botão de texto discreto — ações secundárias e links.
 class StoxTextButton extends StatelessWidget {
-  final String label;
+  final String        label;
   final VoidCallback? onPressed;
-  final IconData? icon;
-  final Color? color;
+  final IconData?     icon;
+  final Color?        color;
 
   const StoxTextButton({
     super.key,
@@ -154,32 +159,31 @@ class StoxTextButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textColor = color ?? Colors.grey.shade600;
-    if (icon != null) {
-      return TextButton.icon(
-        onPressed: () {
-          HapticFeedback.selectionClick();
-          onPressed?.call();
-        },
-        icon: Icon(icon, color: textColor, size: 18),
-        label: Text(label, style: TextStyle(color: textColor)),
-      );
+    void onTap() {
+      HapticFeedback.selectionClick();
+      onPressed?.call();
     }
-    return TextButton(
-      onPressed: () {
-        HapticFeedback.selectionClick();
-        onPressed?.call();
-      },
-      child: Text(label, style: TextStyle(color: textColor)),
-    );
+
+    return icon != null
+        ? TextButton.icon(
+            onPressed: onTap,
+            icon:  Icon(icon, color: textColor, size: 18),
+            label: Text(label, style: TextStyle(color: textColor)),
+          )
+        : TextButton(
+            onPressed: onTap,
+            child: Text(label, style: TextStyle(color: textColor)),
+          );
   }
 }
 
-/// Botão flutuante centralizado (ex: fila de impressão, excluir em lote).
+/// Botão de ação flutuante (FAB) de largura total.
+/// Usado para ações principais no rodapé da tela (ex.: excluir lote).
 class StoxFab extends StatelessWidget {
-  final String label;
-  final IconData icon;
+  final String        label;
+  final IconData      icon;
   final VoidCallback? onPressed;
-  final Color? backgroundColor;
+  final Color?        backgroundColor;
 
   const StoxFab({
     super.key,
@@ -201,7 +205,7 @@ class StoxFab extends StatelessWidget {
             HapticFeedback.lightImpact();
             onPressed?.call();
           },
-          icon: Icon(icon),
+          icon:  Icon(icon),
           label: Text(label,
               style: const TextStyle(
                   fontWeight: FontWeight.bold, fontSize: 15)),

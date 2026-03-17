@@ -1,19 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// Campo de texto padrão do STOX com haptic feedback.
+/// Campo de texto padrão do STOX com haptic feedback no toque.
 class StoxTextField extends StatelessWidget {
-  final TextEditingController controller;
-  final String labelText;
-  final IconData? prefixIcon;
-  final Widget? suffixIcon;
-  final bool obscureText;
-  final TextInputAction? textInputAction;
-  final TextInputType? keyboardType;
-  final TextCapitalization textCapitalization;
+  final TextEditingController  controller;
+  final String                 labelText;
+  final IconData?              prefixIcon;
+  final Widget?                suffixIcon;
+  final bool                   obscureText;
+  final TextInputAction?       textInputAction;
+  final TextInputType?         keyboardType;
+  final TextCapitalization     textCapitalization;
   final void Function(String)? onChanged;
   final void Function(String)? onSubmitted;
-  final String? helperText;
+  final String?                helperText;
 
   const StoxTextField({
     super.key,
@@ -21,10 +21,10 @@ class StoxTextField extends StatelessWidget {
     required this.labelText,
     this.prefixIcon,
     this.suffixIcon,
-    this.obscureText = false,
+    this.obscureText           = false,
     this.textInputAction,
     this.keyboardType,
-    this.textCapitalization = TextCapitalization.none,
+    this.textCapitalization    = TextCapitalization.none,
     this.onChanged,
     this.onSubmitted,
     this.helperText,
@@ -33,16 +33,16 @@ class StoxTextField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return TextField(
-      controller: controller,
-      obscureText: obscureText,
-      textInputAction: textInputAction,
-      keyboardType: keyboardType,
+      controller:         controller,
+      obscureText:        obscureText,
+      textInputAction:    textInputAction,
+      keyboardType:       keyboardType,
       textCapitalization: textCapitalization,
-      onTap: () => HapticFeedback.selectionClick(),
-      onChanged: onChanged,
-      onSubmitted: onSubmitted,
+      onTap:              () => HapticFeedback.selectionClick(),
+      onChanged:          onChanged,
+      onSubmitted:        onSubmitted,
       decoration: InputDecoration(
-        labelText: labelText,
+        labelText:  labelText,
         helperText: helperText,
         prefixIcon: prefixIcon != null ? Icon(prefixIcon) : null,
         suffixIcon: suffixIcon,
@@ -51,17 +51,20 @@ class StoxTextField extends StatelessWidget {
   }
 }
 
-/// Campo de senha com botão de mostrar/ocultar integrado.
+/// Campo de senha com botão mostrar/ocultar integrado.
+///
+/// Gerencia o estado de visibilidade internamente — não é necessário
+/// nenhuma variável extra na tela que o usa.
 class StoxPasswordField extends StatefulWidget {
-  final TextEditingController controller;
-  final String labelText;
-  final TextInputAction? textInputAction;
+  final TextEditingController  controller;
+  final String                 labelText;
+  final TextInputAction?       textInputAction;
   final void Function(String)? onSubmitted;
 
   const StoxPasswordField({
     super.key,
     required this.controller,
-    this.labelText = 'Senha',
+    this.labelText      = 'Senha',
     this.textInputAction,
     this.onSubmitted,
   });
@@ -76,13 +79,13 @@ class _StoxPasswordFieldState extends State<StoxPasswordField> {
   @override
   Widget build(BuildContext context) {
     return TextField(
-      controller: widget.controller,
-      obscureText: _ocultar,
+      controller:      widget.controller,
+      obscureText:     _ocultar,
       textInputAction: widget.textInputAction,
-      onTap: () => HapticFeedback.selectionClick(),
-      onSubmitted: widget.onSubmitted,
+      onTap:           () => HapticFeedback.selectionClick(),
+      onSubmitted:     widget.onSubmitted,
       decoration: InputDecoration(
-        labelText: widget.labelText,
+        labelText:  widget.labelText,
         prefixIcon: const Icon(Icons.lock_outline),
         suffixIcon: IconButton(
           icon: Icon(_ocultar ? Icons.visibility_off : Icons.visibility),
@@ -96,12 +99,15 @@ class _StoxPasswordFieldState extends State<StoxPasswordField> {
   }
 }
 
-/// Barra de busca com ícone de IA e scanner integrados.
+/// Barra de busca com campo de texto, botão de IA e botão de scanner.
+///
+/// [onIA] e [onScanner] são opcionais — seus ícones só aparecem
+/// quando os callbacks são fornecidos.
 class StoxSearchBar extends StatelessWidget {
-  final TextEditingController controller;
-  final VoidCallback onSearch;
-  final VoidCallback? onIA;
-  final VoidCallback? onScanner;
+  final TextEditingController  controller;
+  final VoidCallback           onSearch;
+  final VoidCallback?          onIA;
+  final VoidCallback?          onScanner;
   final void Function(String)? onChanged;
 
   const StoxSearchBar({
@@ -121,27 +127,27 @@ class StoxSearchBar extends StatelessWidget {
       child: Row(children: [
         Expanded(
           child: TextField(
-            controller: controller,
+            controller:     controller,
             textInputAction: TextInputAction.search,
-            onSubmitted: (_) => onSearch(),
-            onTap: () => HapticFeedback.selectionClick(),
-            onChanged: onChanged,
+            onSubmitted:    (_) => onSearch(),
+            onTap:          () => HapticFeedback.selectionClick(),
+            onChanged:      onChanged,
             decoration: InputDecoration(
-              hintText: 'Código ou Nome',
+              hintText:   'Código ou Nome',
               prefixIcon: const Icon(Icons.search),
               suffixIcon: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (onIA != null)
                     IconButton(
-                      icon: const Icon(Icons.auto_awesome,
+                      icon:    const Icon(Icons.auto_awesome,
                           color: Colors.blueAccent),
                       tooltip: 'Ler texto com IA',
                       onPressed: onIA,
                     ),
                   if (onScanner != null)
                     IconButton(
-                      icon: Icon(Icons.qr_code_scanner_rounded,
+                      icon:    Icon(Icons.qr_code_scanner_rounded,
                           color: theme.primaryColor),
                       tooltip: 'Escanear código de barras',
                       onPressed: onScanner,
@@ -154,7 +160,7 @@ class StoxSearchBar extends StatelessWidget {
         const SizedBox(width: 8),
         SizedBox(
           height: 56,
-          width: 56,
+          width:  56,
           child: ElevatedButton(
             onPressed: () {
               HapticFeedback.lightImpact();

@@ -1,8 +1,10 @@
-/// Barrel de widgets do STOX.
-/// Importe apenas este arquivo nas telas:
-///   import '../widgets/widgets.dart';
-library stox_widgets;
-
+/// Barrel de exportação dos widgets do STOX.
+///
+/// Nas telas, importe apenas este arquivo:
+/// ```dart
+/// import '../widgets/widgets.dart';
+/// ```
+library;
 export 'stox_button.dart';
 export 'stox_card.dart';
 export 'stox_dialog.dart';

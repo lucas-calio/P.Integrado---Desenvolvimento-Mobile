@@ -1,6 +1,12 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
+/// Singleton de acesso ao banco SQLite local do STOX.
+///
+/// Gerencia o ciclo de vida do banco, migrations e operações CRUD
+/// da tabela [contagens].
+///
+/// syncStatus: 0 = Pendente, 1 = Sincronizado, 2 = Erro no envio.
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
@@ -14,39 +20,42 @@ class DatabaseHelper {
   }
 
   Future<Database> _initDB(String filePath) async {
-    final dbPath = await getDatabasesPath();
-    final path = join(dbPath, filePath);
-
-    return await openDatabase(
+    final path = join(await getDatabasesPath(), filePath);
+    return openDatabase(
       path,
-      version: 1,
-      onCreate: _createDB,
+      version: 2,
+      onCreate:  _criarTabelas,
+      onUpgrade: _migrar,
     );
   }
 
-  Future _createDB(Database db, int version) async {
-    const idType = 'INTEGER PRIMARY KEY AUTOINCREMENT';
-    const textType = 'TEXT NOT NULL';
-    const realType = 'REAL NOT NULL';
-    const intType = 'INTEGER NOT NULL';
-
-    // Criação da tabela com a coluna de syncStatus (0: Pendente, 1: Sincronizado, 2: Erro)
+  /// Cria o schema completo na primeira instalação.
+  Future<void> _criarTabelas(Database db, int version) async {
     await db.execute('''
       CREATE TABLE contagens (
-        id $idType,
-        itemCode $textType,
-        quantidade $realType,
-        dataHora $textType,
-        syncStatus $intType DEFAULT 0
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        itemCode      TEXT    NOT NULL,
+        quantidade    REAL    NOT NULL,
+        dataHora      TEXT    NOT NULL,
+        syncStatus    INTEGER NOT NULL DEFAULT 0,
+        warehouseCode TEXT    NOT NULL DEFAULT '01'
       )
     ''');
-
-    // Criação de índices para otimizar buscas em tabelas volumosas
-    await db.execute('CREATE INDEX idx_itemCode ON contagens (itemCode)');
+    await db.execute('CREATE INDEX idx_itemCode   ON contagens (itemCode)');
     await db.execute('CREATE INDEX idx_syncStatus ON contagens (syncStatus)');
   }
 
-  // --- MÉTODOS DE OPERAÇÃO ---
+  /// Aplica migrations incrementais para usuários que já tinham o banco instalado.
+  Future<void> _migrar(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // v1 → v2: adição da coluna warehouseCode
+      await db.execute(
+          "ALTER TABLE contagens ADD COLUMN warehouseCode TEXT NOT NULL DEFAULT '01'");
+    }
+    // Para futuras versões: if (oldVersion < 3) { ... }
+  }
+
+  // ── CRUD ──────────────────────────────────────────────────────────────────
 
   Future<int> inserirContagem(
     String itemCode,
@@ -54,98 +63,87 @@ class DatabaseHelper {
     String warehouseCode = '01',
   }) async {
     final db = await instance.database;
-    final data = {
+    return db.insert('contagens', {
       'itemCode':      itemCode.toUpperCase(),
       'quantidade':    quantidade,
       'dataHora':      DateTime.now().toIso8601String(),
       'syncStatus':    0,
       'warehouseCode': warehouseCode.toUpperCase(),
-    };
-    return await db.insert('contagens', data);
+    });
   }
 
+  /// Atualiza a quantidade e redefine o status para Pendente (0).
   Future<int> atualizarContagem(int id, double novaQuantidade) async {
     final db = await instance.database;
-    return await db.update(
+    return db.update(
       'contagens',
       {
         'quantidade': novaQuantidade,
-        'dataHora': DateTime.now().toIso8601String(), // Atualiza a hora da edição
-        'syncStatus': 0, // Retorna para pendente, pois o valor foi alterado
+        'dataHora':   DateTime.now().toIso8601String(),
+        'syncStatus': 0,
       },
-      where: 'id = ?',
+      where:     'id = ?',
       whereArgs: [id],
     );
   }
 
   Future<int> atualizarStatusSincronizacao(int id, int novoStatus) async {
     final db = await instance.database;
-    return await db.update(
+    return db.update(
       'contagens',
-      {
-        'syncStatus': novoStatus,
-      },
-      where: 'id = ?',
+      {'syncStatus': novoStatus},
+      where:     'id = ?',
       whereArgs: [id],
     );
   }
 
   Future<int> excluirContagem(int id) async {
     final db = await instance.database;
-    return await db.delete(
-      'contagens',
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    return db.delete('contagens', where: 'id = ?', whereArgs: [id]);
   }
 
+  /// Retorna todas as contagens, ordenadas da mais recente para a mais antiga.
   Future<List<Map<String, dynamic>>> buscarContagens() async {
     final db = await instance.database;
-    // Retorna ordenado pela data mais recente
-    return await db.query('contagens', orderBy: 'dataHora DESC');
+    return db.query('contagens', orderBy: 'dataHora DESC');
   }
 
+  /// Retorna apenas contagens Pendentes (0) ou com Erro (2), no formato FIFO.
   Future<List<Map<String, dynamic>>> buscarContagensPendentes() async {
     final db = await instance.database;
-    // Busca apenas as contagens que não foram enviadas ou deram erro
-    return await db.query(
+    return db.query(
       'contagens',
-      where: 'syncStatus IN (?, ?)',
+      where:     'syncStatus IN (?, ?)',
       whereArgs: [0, 2],
-      orderBy: 'dataHora ASC', // FIFO: envia as mais antigas primeiro
+      orderBy:   'dataHora ASC',
     );
   }
 
   Future<double> calcularTotalPorItem(String itemCode) async {
-    final db = await instance.database;
+    final db     = await instance.database;
     final result = await db.rawQuery(
-      'SELECT SUM(quantidade) as total FROM contagens WHERE itemCode = ?',
-      [itemCode.toUpperCase()]
+      'SELECT SUM(quantidade) AS total FROM contagens WHERE itemCode = ?',
+      [itemCode.toUpperCase()],
     );
-    // Tratamento para garantir que retorne double mesmo se for nulo
     final total = result.first['total'];
-    if (total == null) return 0.0;
-    return (total as num).toDouble();
+    return total == null ? 0.0 : (total as num).toDouble();
   }
 
+  /// Remove todas as contagens (usado após sincronização bem-sucedida).
   Future<void> limparContagens() async {
     final db = await instance.database;
     await db.delete('contagens');
   }
 
+  /// Remove apenas as contagens com status Sincronizado (1).
   Future<void> limparContagensSincronizadas() async {
     final db = await instance.database;
-    // Exclui apenas as contagens que já foram confirmadas pelo SAP (status 1)
-    await db.delete(
-      'contagens',
-      where: 'syncStatus = ?',
-      whereArgs: [1],
-    );
+    await db.delete('contagens', where: 'syncStatus = ?', whereArgs: [1]);
   }
 
-  Future close() async {
+  Future<void> close() async {
     final db = await instance.database;
-    _database = null; // Limpa a referência para segurança
+    _database = null;
     await db.close();
   }
 }

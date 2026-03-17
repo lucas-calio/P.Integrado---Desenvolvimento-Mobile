@@ -1,35 +1,38 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// Utilitário de diálogos padronizados do STOX.
+/// Utilitários de diálogos padronizados do STOX.
+///
+/// Classe abstrata — não deve ser instanciada.
 abstract class StoxDialog {
-
-  /// Diálogo de confirmação simples (Cancelar / Confirmar).
+  /// Diálogo de confirmação simples com botões Cancelar / Confirmar.
+  ///
+  /// Defina [destrutivo] como `true` para colorir o botão de confirmação em vermelho.
   static Future<bool> confirmar(
     BuildContext context, {
     required String titulo,
     required String mensagem,
     String labelConfirmar = 'CONFIRMAR',
-    String labelCancelar = 'CANCELAR',
-    bool destrutivo = false,
+    String labelCancelar  = 'CANCELAR',
+    bool   destrutivo     = false,
   }) async {
     final resultado = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         title: Text(titulo,
             style: const TextStyle(fontWeight: FontWeight.bold)),
         content: Text(mensagem),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(dialogCtx, false),
             child: Text(labelCancelar,
                 style: TextStyle(color: Colors.grey.shade600)),
           ),
           ElevatedButton(
             onPressed: () {
               HapticFeedback.lightImpact();
-              Navigator.pop(context, true);
+              Navigator.pop(dialogCtx, true);
             },
             style: destrutivo
                 ? ElevatedButton.styleFrom(
@@ -44,8 +47,9 @@ abstract class StoxDialog {
     return resultado ?? false;
   }
 
-  /// Diálogo de confirmação com digitação de palavra-chave.
-  /// Usado para exclusões críticas (3+ itens).
+  /// Diálogo de confirmação que exige digitação de [palavraChave].
+  ///
+  /// Indicado para exclusões críticas onde um clique acidental seria custoso.
   static Future<bool> confirmarComDigitacao(
     BuildContext context, {
     required String titulo,
@@ -53,22 +57,23 @@ abstract class StoxDialog {
     String palavraChave = 'EXCLUIR',
   }) async {
     final controller = TextEditingController();
-    bool habilitado = false;
+    var   habilitado  = false;
 
     final resultado = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (dialogCtx, setState) => AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12)),
           title: Row(children: [
             Icon(Icons.warning_amber_rounded,
                 color: Colors.red.shade600, size: 24),
             const SizedBox(width: 8),
             Expanded(
-                child: Text(titulo,
-                    style: const TextStyle(fontWeight: FontWeight.bold))),
+              child: Text(titulo,
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
           ]),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -84,8 +89,8 @@ abstract class StoxDialog {
                 controller: controller,
                 textCapitalization: TextCapitalization.characters,
                 onTap: () => HapticFeedback.selectionClick(),
-                onChanged: (v) => setDialogState(
-                    () => habilitado = v.trim() == palavraChave),
+                onChanged: (v) =>
+                    setState(() => habilitado = v.trim() == palavraChave),
                 decoration: InputDecoration(
                   hintText: palavraChave,
                   border: OutlineInputBorder(
@@ -98,7 +103,7 @@ abstract class StoxDialog {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: () => Navigator.pop(dialogCtx, false),
               child: Text('CANCELAR',
                   style: TextStyle(color: Colors.grey.shade600)),
             ),
@@ -106,7 +111,7 @@ abstract class StoxDialog {
               onPressed: habilitado
                   ? () {
                       HapticFeedback.heavyImpact();
-                      Navigator.pop(context, true);
+                      Navigator.pop(dialogCtx, true);
                     }
                   : null,
               style: ElevatedButton.styleFrom(
@@ -124,31 +129,32 @@ abstract class StoxDialog {
   }
 }
 
-/// Chip de status (Estoque / Venda / Compra).
+/// Chip de status booleano — indica se um item está habilitado ou não.
+///
+/// Usado nos chips Estoque / Venda / Compra da tela de consulta.
 class StoxStatusChip extends StatelessWidget {
   final String label;
-  final bool active;
+  final bool   active;
 
   const StoxStatusChip(this.label, {super.key, required this.active});
 
   @override
-  Widget build(BuildContext context) {
-    return Chip(
-      label: Text(label),
-      backgroundColor:
-          active ? Colors.green.shade50 : Colors.grey.shade100,
-      avatar: Icon(
-        active ? Icons.check_circle : Icons.cancel,
-        size: 16,
-        color: active ? Colors.green : Colors.grey,
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Chip(
+        label:           Text(label),
+        backgroundColor: active ? Colors.green.shade50 : Colors.grey.shade100,
+        avatar: Icon(
+          active ? Icons.check_circle : Icons.cancel,
+          size:  16,
+          color: active ? Colors.green : Colors.grey,
+        ),
+      );
 }
 
-/// Badge numérico (ex: contador no ícone da fila de impressão).
+/// Badge numérico sobreposto a um widget filho.
+///
+/// Oculta automaticamente quando [count] é zero.
 class StoxBadge extends StatelessWidget {
-  final int count;
+  final int    count;
   final Widget child;
 
   const StoxBadge({
@@ -165,9 +171,9 @@ class StoxBadge extends StatelessWidget {
         if (count > 0)
           Positioned(
             right: 6,
-            top: 6,
+            top:   6,
             child: Container(
-              width: 18,
+              width:  18,
               height: 18,
               decoration: BoxDecoration(
                   color: Colors.red.shade600, shape: BoxShape.circle),
@@ -175,8 +181,8 @@ class StoxBadge extends StatelessWidget {
                 child: Text(
                   '$count',
                   style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
+                      color:      Colors.white,
+                      fontSize:   11,
                       fontWeight: FontWeight.bold),
                 ),
               ),

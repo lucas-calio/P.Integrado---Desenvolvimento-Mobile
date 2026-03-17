@@ -1,85 +1,107 @@
-import 'package:image_picker/image_picker.dart';
-import 'package:image_cropper/image_cropper.dart';
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:flutter/material.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:image_cropper/image_cropper.dart';
+import 'package:image_picker/image_picker.dart';
 
+/// Serviço de leitura de texto via câmera usando Google ML Kit.
+///
+/// Fluxo principal ([lerAnotacaoDaCamera]):
+/// 1. Captura foto com a câmera
+/// 2. Abre UI de recorte para o usuário isolar o texto
+/// 3. Processa a imagem recortada com OCR (script latino)
+/// 4. Extrai código do item e quantidade do texto reconhecido
 class OcrService {
-  static final ImagePicker _picker = ImagePicker();
+  OcrService._();
 
+  static final _picker = ImagePicker();
+
+  // ── OCR principal ─────────────────────────────────────────────────────────
+
+  /// Captura, recorta e processa uma imagem da câmera.
+  ///
+  /// Retorna `{'itemCode': ..., 'quantidade': ...}` ou `null` se o usuário
+  /// cancelar em qualquer etapa ou se ocorrer um erro.
   static Future<Map<String, String>?> lerAnotacaoDaCamera() async {
     try {
-      // 1. Tira a foto
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.camera,
+      final imagem = await _picker.pickImage(
+        source:       ImageSource.camera,
         imageQuality: 85,
       );
-      if (image == null) return null;
+      if (imagem == null) return null;
 
-      // 2. Abre a tela de recorte
-      CroppedFile? croppedFile = await ImageCropper().cropImage(
-        sourcePath: image.path,
+      final recorte = await ImageCropper().cropImage(
+        sourcePath:  imagem.path,
         aspectRatio: const CropAspectRatio(ratioX: 4, ratioY: 1),
         uiSettings: [
           AndroidUiSettings(
-            toolbarTitle: 'Recorte o Texto LIDO',
-            toolbarColor: Colors.black,
+            toolbarTitle:      'Recorte o texto',
+            toolbarColor:      Colors.black,
             toolbarWidgetColor: Colors.white,
-            initAspectRatio: CropAspectRatioPreset.ratio16x9,
-            lockAspectRatio: false,
+            initAspectRatio:   CropAspectRatioPreset.ratio16x9,
+            lockAspectRatio:   false,
             hideBottomControls: true,
           ),
-          IOSUiSettings(
-            title: 'Ajustar Área',
-          ),
+          IOSUiSettings(title: 'Ajustar área'),
         ],
       );
+      if (recorte == null) return null;
 
-      // Usuário cancelou o recorte
-      if (croppedFile == null) return null;
-
-      // 3. ML Kit processa a imagem recortada
-      final inputImage    = InputImage.fromFilePath(croppedFile.path);
-      final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
-      final RecognizedText recognizedText =
-          await textRecognizer.processImage(inputImage);
-      await textRecognizer.close();
-
-      final textoBruto = recognizedText.text.trim();
-      final partes     = textoBruto.split(RegExp(r'\s+'));
-
-      String itemCode  = '';
-      String quantidade = '';
-
-      if (partes.isNotEmpty) {
-        if (partes.length > 1) {
-          final ultimaParte = partes.last.replaceAll(',', '.');
-          if (RegExp(r'^\d+(\.\d+)?$').hasMatch(ultimaParte)) {
-            quantidade = ultimaParte;
-            partes.removeLast();
-            itemCode = partes.join(' ');
-          } else {
-            itemCode = partes.join(' ');
-          }
-        } else {
-          itemCode = partes[0];
-        }
-      }
-
-      return {'itemCode': itemCode, 'quantidade': quantidade};
+      final resultado = await _reconhecerTexto(recorte.path);
+      return _parsearTexto(resultado);
     } catch (e) {
-      debugPrint('Erro no OCR: $e');
+      debugPrint('OcrService.lerAnotacaoDaCamera: $e');
       return null;
     }
   }
 
   /// Extrai texto de uma imagem sem recorte — uso genérico.
   static Future<String?> extractText({required ImageSource source}) async {
-    final image = await _picker.pickImage(source: source);
-    if (image == null) return null;
-    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
-    final recognizedText = await textRecognizer
-        .processImage(InputImage.fromFilePath(image.path));
-    await textRecognizer.close();
-    return recognizedText.text;
+    try {
+      final imagem = await _picker.pickImage(source: source);
+      if (imagem == null) return null;
+      return await _reconhecerTexto(imagem.path);
+    } catch (e) {
+      debugPrint('OcrService.extractText: $e');
+      return null;
+    }
+  }
+
+  // ── Helpers privados ──────────────────────────────────────────────────────
+
+  /// Executa o OCR numa imagem e retorna o texto bruto.
+  static Future<String> _reconhecerTexto(String caminhoArquivo) async {
+    final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
+    try {
+      final resultado = await recognizer
+          .processImage(InputImage.fromFilePath(caminhoArquivo));
+      return resultado.text.trim();
+    } finally {
+      await recognizer.close();
+    }
+  }
+
+  /// Interpreta o texto OCR como "CÓDIGO_ITEM QUANTIDADE".
+  ///
+  /// Se a última palavra for numérica, é tratada como quantidade;
+  /// o restante é tratado como código do item.
+  static Map<String, String> _parsearTexto(String texto) {
+    final partes = texto.split(RegExp(r'\s+'));
+    if (partes.isEmpty || (partes.length == 1 && partes[0].isEmpty)) {
+      return {'itemCode': '', 'quantidade': ''};
+    }
+
+    if (partes.length == 1) {
+      return {'itemCode': partes[0], 'quantidade': ''};
+    }
+
+    final ultimaParte = partes.last.replaceAll(',', '.');
+    if (RegExp(r'^\d+(\.\d+)?$').hasMatch(ultimaParte)) {
+      return {
+        'itemCode':  partes.sublist(0, partes.length - 1).join(' '),
+        'quantidade': ultimaParte,
+      };
+    }
+
+    return {'itemCode': partes.join(' '), 'quantidade': ''};
   }
 }
