@@ -246,18 +246,16 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
                       borderRadius: BorderRadius.circular(16),
                       child: MobileScanner(
                         scanWindow: scanWindow,
-                        onDetect: (capture) async {
+                        onDetect: (capture) {
                           if (_scannerAtivo) return;
                           final barcodes = capture.barcodes;
                           if (barcodes.isEmpty) return;
                           final code = barcodes.first.rawValue ?? '';
                           if (code.isEmpty) return;
                           _scannerAtivo = true;
-                          await StoxAudio.play('sounds/beep.mp3');
-                          if (!mounted) return;
                           _searchController.text = code;
-                          // ignore: use_build_context_synchronously
                           Navigator.of(sheetCtx).pop();
+                          StoxAudio.play('sounds/beep.mp3');
                           _buscar();
                         },
                       ),

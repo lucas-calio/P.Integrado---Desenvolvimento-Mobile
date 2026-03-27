@@ -394,17 +394,15 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
                       borderRadius: BorderRadius.circular(16),
                       child: MobileScanner(
                         scanWindow: scanWindow,
-                        onDetect: (capture) async {
+                        onDetect: (capture) {
                           if (_scannerAtivo) return;
                           final barcodes = capture.barcodes;
                           if (barcodes.isEmpty) return;
                           _scannerAtivo = true;
                           final code = barcodes.first.rawValue ?? '';
-                          await StoxAudio.play('sounds/beep.mp3');
-                          if (!mounted) return;
                           _codigoController.text = code;
-                          // ignore: use_build_context_synchronously
                           Navigator.of(sheetCtx).pop();
+                          StoxAudio.play('sounds/beep.mp3');
                           _focusNodeCodigo.nextFocus();
                         },
                       ),
@@ -627,6 +625,9 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
                   return;
                 }
 
+                // Captura o Navigator antes do gap async
+                final navigator = Navigator.of(dialogCtx);
+
                 final db = await DatabaseHelper.instance.database;
                 await db.update(
                   'contagens',
@@ -640,10 +641,9 @@ class _ContadorOfflinePageState extends State<ContadorOfflinePage> {
                   whereArgs: [item['id']],
                 );
 
+                navigator.pop();
                 await StoxAudio.play('sounds/check.mp3');
                 if (!mounted) return;
-                // ignore: use_build_context_synchronously
-                Navigator.pop(dialogCtx);
                 await _carregarContagens();
                 if (!mounted) return;
                 StoxSnackbar.sucesso(context, 'Contagem atualizada!');

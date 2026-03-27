@@ -11,11 +11,19 @@ class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
 
+  /// Future de inicialização compartilhada — evita race condition
+  /// quando múltiplas chamadas a [database] ocorrem simultaneamente.
+  static Future<Database>? _initFuture;
+
   DatabaseHelper._init();
 
+  /// Retorna a instância do banco, criando-a se necessário.
+  ///
+  /// Chamadas simultâneas aguardam a mesma Future de inicialização,
+  /// garantindo que apenas um banco seja aberto.
   Future<Database> get database async {
     if (_database != null) return _database!;
-    _database = await _initDB('stox_offline.db');
+    _database = await (_initFuture ??= _initDB('stox_offline.db'));
     return _database!;
   }
 
@@ -24,7 +32,7 @@ class DatabaseHelper {
     return openDatabase(
       path,
       version: 2,
-      onCreate:  _criarTabelas,
+      onCreate: _criarTabelas,
       onUpgrade: _migrar,
     );
   }
@@ -57,6 +65,7 @@ class DatabaseHelper {
 
   // ── CRUD ──────────────────────────────────────────────────────────────────
 
+  /// Insere uma nova contagem com status Pendente (0).
   Future<int> inserirContagem(
     String itemCode,
     double quantidade, {
@@ -64,10 +73,10 @@ class DatabaseHelper {
   }) async {
     final db = await instance.database;
     return db.insert('contagens', {
-      'itemCode':      itemCode.toUpperCase(),
-      'quantidade':    quantidade,
-      'dataHora':      DateTime.now().toIso8601String(),
-      'syncStatus':    0,
+      'itemCode': itemCode.toUpperCase(),
+      'quantidade': quantidade,
+      'dataHora': DateTime.now().toIso8601String(),
+      'syncStatus': 0,
       'warehouseCode': warehouseCode.toUpperCase(),
     });
   }
@@ -79,24 +88,28 @@ class DatabaseHelper {
       'contagens',
       {
         'quantidade': novaQuantidade,
-        'dataHora':   DateTime.now().toIso8601String(),
+        'dataHora': DateTime.now().toIso8601String(),
         'syncStatus': 0,
       },
-      where:     'id = ?',
+      where: 'id = ?',
       whereArgs: [id],
     );
   }
 
+  /// Atualiza o status de sincronização de uma contagem.
+  ///
+  /// Valores: 0 = Pendente, 1 = Sincronizado, 2 = Erro no envio.
   Future<int> atualizarStatusSincronizacao(int id, int novoStatus) async {
     final db = await instance.database;
     return db.update(
       'contagens',
       {'syncStatus': novoStatus},
-      where:     'id = ?',
+      where: 'id = ?',
       whereArgs: [id],
     );
   }
 
+  /// Remove uma contagem pelo [id].
   Future<int> excluirContagem(int id) async {
     final db = await instance.database;
     return db.delete('contagens', where: 'id = ?', whereArgs: [id]);
@@ -113,14 +126,15 @@ class DatabaseHelper {
     final db = await instance.database;
     return db.query(
       'contagens',
-      where:     'syncStatus IN (?, ?)',
+      where: 'syncStatus IN (?, ?)',
       whereArgs: [0, 2],
-      orderBy:   'dataHora ASC',
+      orderBy: 'dataHora ASC',
     );
   }
 
+  /// Calcula a soma total de quantidade para um [itemCode] específico.
   Future<double> calcularTotalPorItem(String itemCode) async {
-    final db     = await instance.database;
+    final db = await instance.database;
     final result = await db.rawQuery(
       'SELECT SUM(quantidade) AS total FROM contagens WHERE itemCode = ?',
       [itemCode.toUpperCase()],
@@ -141,9 +155,13 @@ class DatabaseHelper {
     await db.delete('contagens', where: 'syncStatus = ?', whereArgs: [1]);
   }
 
+  /// Fecha o banco e limpa as referências internas.
+  ///
+  /// Seguro para chamar mesmo que o banco nunca tenha sido aberto.
   Future<void> close() async {
-    final db = await instance.database;
+    final db = _database;
     _database = null;
-    await db.close();
+    _initFuture = null;
+    await db?.close();
   }
 }

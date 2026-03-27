@@ -7,31 +7,26 @@ import 'src/widgets/stox_theme.dart';
 ///
 /// Configura o [MaterialApp] com o tema SAP Fiori ([StoxTheme.lightTheme]),
 /// define [LoginPage] como rota inicial e aplica transição padrão
-/// (slide 4% + fade, 300ms) em todas as navegações via [onGenerateRoute].
+/// (slide 4% + fade, 300ms) em todas as navegações via [StoxApp.transicaoPadrao].
 class StoxApp extends StatelessWidget {
   const StoxApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title:                     'STOX - Inventário',
+      title: 'STOX - Inventário',
       debugShowCheckedModeBanner: false,
-      theme:                     StoxTheme.lightTheme,
-      home:                      const LoginPage(),
-      onGenerateRoute:           _gerarRota,
+      theme: StoxTheme.lightTheme,
+      home: const LoginPage(),
     );
   }
 
-  // ── Transição padrão entre telas ──
-
-  /// Slide sutil da direita (4%) combinado com fade.
-  /// Duração: 300ms com [Curves.easeOut].
-  Route<dynamic>? _gerarRota(RouteSettings settings) {
-    // Mapear rotas nomeadas aqui se necessário no futuro.
-    return null;
-  }
+  // ── Transição padrão entre telas ──────────────────────────────────────────
 
   /// Cria um [PageRouteBuilder] com a transição padrão do STOX.
+  ///
+  /// Slide sutil da direita (4%) combinado com fade.
+  /// Duração: 300ms com [Curves.easeOut].
   ///
   /// Usar em qualquer `Navigator.push` para manter consistência:
   /// ```dart

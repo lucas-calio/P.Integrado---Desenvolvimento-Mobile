@@ -7,10 +7,14 @@ import 'package:flutter/services.dart';
 ///
 /// Scale 0.95 → 1.0 em 80ms. Aplicado automaticamente em [StoxButton],
 /// [StoxOutlinedButton], [StoxTextButton] e [StoxFab].
+///
+/// Quando [enabled] é `false`, a animação de compressão não é acionada,
+/// evitando feedback visual em botões desabilitados.
 class _StoxPressable extends StatefulWidget {
   final Widget child;
+  final bool enabled;
 
-  const _StoxPressable({required this.child});
+  const _StoxPressable({required this.child, this.enabled = true});
 
   @override
   State<_StoxPressable> createState() => _StoxPressableState();
@@ -45,9 +49,9 @@ class _StoxPressableState extends State<_StoxPressable>
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTapDown: (_) => _ctrl.reverse(),
-      onTapUp: (_) => _ctrl.forward(),
-      onTapCancel: () => _ctrl.forward(),
+      onTapDown: widget.enabled ? (_) => _ctrl.reverse() : null,
+      onTapUp: widget.enabled ? (_) => _ctrl.forward() : null,
+      onTapCancel: widget.enabled ? () => _ctrl.forward() : null,
       child: ScaleTransition(scale: _scale, child: widget.child),
     );
   }
@@ -61,36 +65,39 @@ class _StoxPressableState extends State<_StoxPressable>
 /// e desabilita o toque automaticamente. Envolvido por [_StoxPressable]
 /// para animação de compressão ao toque.
 class StoxButton extends StatelessWidget {
-  final String        label;
+  final String label;
   final VoidCallback? onPressed;
-  final bool          loading;
-  final IconData?     icon;
-  final Color?        backgroundColor;
-  final double        height;
+  final bool loading;
+  final IconData? icon;
+  final Color? backgroundColor;
+  final double height;
 
   const StoxButton({
     super.key,
     required this.label,
     this.onPressed,
-    this.loading         = false,
+    this.loading = false,
     this.icon,
     this.backgroundColor,
-    this.height          = 54,
+    this.height = 54,
   });
+
+  bool get _habilitado => !loading && onPressed != null;
 
   @override
   Widget build(BuildContext context) {
     return _StoxPressable(
+      enabled: _habilitado,
       child: SizedBox(
         width: double.infinity,
         height: height,
         child: ElevatedButton(
-          onPressed: loading
-              ? null
-              : () {
+          onPressed: _habilitado
+              ? () {
                   HapticFeedback.lightImpact();
-                  onPressed?.call();
-                },
+                  onPressed!.call();
+                }
+              : null,
           style: ElevatedButton.styleFrom(
             backgroundColor: backgroundColor,
             shape: RoundedRectangleBorder(
@@ -126,11 +133,11 @@ class StoxButton extends StatelessWidget {
 
 /// Botão secundário do STOX — substitui [OutlinedButton] nas telas.
 class StoxOutlinedButton extends StatelessWidget {
-  final String        label;
+  final String label;
   final VoidCallback? onPressed;
-  final IconData?     icon;
-  final Color?        foregroundColor;
-  final double        height;
+  final IconData? icon;
+  final Color? foregroundColor;
+  final double height;
 
   const StoxOutlinedButton({
     super.key,
@@ -145,14 +152,17 @@ class StoxOutlinedButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = foregroundColor ?? Theme.of(context).primaryColor;
     return _StoxPressable(
+      enabled: onPressed != null,
       child: SizedBox(
         width: double.infinity,
         height: height,
         child: OutlinedButton(
-          onPressed: () {
-            HapticFeedback.mediumImpact();
-            onPressed?.call();
-          },
+          onPressed: onPressed != null
+              ? () {
+                  HapticFeedback.mediumImpact();
+                  onPressed!.call();
+                }
+              : null,
           style: OutlinedButton.styleFrom(
             foregroundColor: color,
             side: BorderSide(color: color, width: 1.5),
@@ -182,10 +192,10 @@ class StoxOutlinedButton extends StatelessWidget {
 /// Botão de ação destrutiva (excluir, limpar).
 /// Atalho para [StoxOutlinedButton] com cor vermelha.
 class StoxDestructiveButton extends StatelessWidget {
-  final String        label;
+  final String label;
   final VoidCallback? onPressed;
-  final IconData?     icon;
-  final double        height;
+  final IconData? icon;
+  final double height;
 
   const StoxDestructiveButton({
     super.key,
@@ -197,11 +207,11 @@ class StoxDestructiveButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => StoxOutlinedButton(
-        label:           label,
-        onPressed:       onPressed,
-        icon:            icon,
+        label: label,
+        onPressed: onPressed,
+        icon: icon,
         foregroundColor: Colors.red.shade600,
-        height:          height,
+        height: height,
       );
 }
 
@@ -209,10 +219,10 @@ class StoxDestructiveButton extends StatelessWidget {
 
 /// Botão de texto discreto — ações secundárias e links.
 class StoxTextButton extends StatelessWidget {
-  final String        label;
+  final String label;
   final VoidCallback? onPressed;
-  final IconData?     icon;
-  final Color?        color;
+  final IconData? icon;
+  final Color? color;
 
   const StoxTextButton({
     super.key,
@@ -225,16 +235,19 @@ class StoxTextButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textColor = color ?? Colors.grey.shade600;
-    void onTap() {
-      HapticFeedback.selectionClick();
-      onPressed?.call();
-    }
+    final VoidCallback? onTap = onPressed != null
+        ? () {
+            HapticFeedback.selectionClick();
+            onPressed!.call();
+          }
+        : null;
 
     return _StoxPressable(
+      enabled: onPressed != null,
       child: icon != null
           ? TextButton.icon(
               onPressed: onTap,
-              icon:  Icon(icon, color: textColor, size: 18),
+              icon: Icon(icon, color: textColor, size: 18),
               label: Text(label, style: TextStyle(color: textColor)),
             )
           : TextButton(
@@ -250,10 +263,10 @@ class StoxTextButton extends StatelessWidget {
 /// Botão de ação flutuante (FAB) de largura total.
 /// Usado para ações principais no rodapé da tela (ex.: excluir lote).
 class StoxFab extends StatelessWidget {
-  final String        label;
-  final IconData      icon;
+  final String label;
+  final IconData icon;
   final VoidCallback? onPressed;
-  final Color?        backgroundColor;
+  final Color? backgroundColor;
 
   const StoxFab({
     super.key,
@@ -266,17 +279,20 @@ class StoxFab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _StoxPressable(
+      enabled: onPressed != null,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24),
         child: SizedBox(
           width: double.infinity,
           height: 52,
           child: ElevatedButton.icon(
-            onPressed: () {
-              HapticFeedback.lightImpact();
-              onPressed?.call();
-            },
-            icon:  Icon(icon),
+            onPressed: onPressed != null
+                ? () {
+                    HapticFeedback.lightImpact();
+                    onPressed!.call();
+                  }
+                : null,
+            icon: Icon(icon),
             label: Text(label,
                 style: const TextStyle(
                     fontWeight: FontWeight.bold, fontSize: 15)),

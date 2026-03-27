@@ -36,7 +36,7 @@ class _HomePageState extends State<HomePage> {
   bool _sapConectado = false;
   bool _semInternet = false;
 
-  late StreamSubscription<List<ConnectivityResult>> _connectivitySub;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
 
   @override
   void initState() {
@@ -47,7 +47,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
-    _connectivitySub.cancel();
+    _connectivitySub?.cancel();
     super.dispose();
   }
 
@@ -301,7 +301,7 @@ class _HomePageState extends State<HomePage> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
         title: Row(
@@ -398,7 +398,7 @@ class _HomePageState extends State<HomePage> {
             StoxTextButton(
               label: 'IR PARA CONFIGURAÇÕES',
               onPressed: () {
-                Navigator.pop(context);
+                Navigator.pop(dialogCtx);
                 Navigator.push(
                   context,
                   StoxApp.transicaoPadrao(const ApiConfigPage()),
@@ -408,7 +408,7 @@ class _HomePageState extends State<HomePage> {
           ElevatedButton(
             onPressed: () {
               HapticFeedback.lightImpact();
-              Navigator.pop(context);
+              Navigator.pop(dialogCtx);
               if (erro.titulo.contains('expirada')) {
                 Navigator.pushAndRemoveUntil(
                   context,
@@ -766,7 +766,17 @@ class _HomePageState extends State<HomePage> {
           icon: Icon(Icons.delete_outline_rounded, color: Colors.red.shade400),
           onPressed: () async {
             HapticFeedback.vibrate();
+            final confirmar = await StoxDialog.confirmar(
+              context,
+              titulo: 'Excluir contagem',
+              mensagem:
+                  'Deseja excluir a contagem do item "${item['itemCode']}"?',
+              labelConfirmar: 'EXCLUIR',
+              destrutivo: true,
+            );
+            if (!confirmar) return;
             await DatabaseHelper.instance.excluirContagem(item['id']);
+            if (!mounted) return;
             _carregarContagens();
           },
         ),

@@ -13,8 +13,8 @@ abstract class StoxDialog {
     required String titulo,
     required String mensagem,
     String labelConfirmar = 'CONFIRMAR',
-    String labelCancelar  = 'CANCELAR',
-    bool   destrutivo     = false,
+    String labelCancelar = 'CANCELAR',
+    bool destrutivo = false,
   }) async {
     final resultado = await showDialog<bool>(
       context: context,
@@ -57,7 +57,7 @@ abstract class StoxDialog {
     String palavraChave = 'EXCLUIR',
   }) async {
     final controller = TextEditingController();
-    var   habilitado  = false;
+    var habilitado = false;
 
     final resultado = await showDialog<bool>(
       context: context,
@@ -132,19 +132,22 @@ abstract class StoxDialog {
 /// Chip de status booleano — indica se um item está habilitado ou não.
 ///
 /// Usado nos chips Estoque / Venda / Compra da tela de consulta.
+/// Compatível com Material 3 (`color` em vez de `backgroundColor`).
 class StoxStatusChip extends StatelessWidget {
   final String label;
-  final bool   active;
+  final bool active;
 
   const StoxStatusChip(this.label, {super.key, required this.active});
 
   @override
   Widget build(BuildContext context) => Chip(
-        label:           Text(label),
-        backgroundColor: active ? Colors.green.shade50 : Colors.grey.shade100,
+        label: Text(label),
+        color: WidgetStatePropertyAll(
+          active ? Colors.green.shade50 : Colors.grey.shade100,
+        ),
         avatar: Icon(
           active ? Icons.check_circle : Icons.cancel,
-          size:  16,
+          size: 16,
           color: active ? Colors.green : Colors.grey,
         ),
       );
@@ -153,8 +156,9 @@ class StoxStatusChip extends StatelessWidget {
 /// Badge numérico sobreposto a um widget filho.
 ///
 /// Oculta automaticamente quando [count] é zero.
+/// Suporta contagens de 1 a 99+ sem overflow visual.
 class StoxBadge extends StatelessWidget {
-  final int    count;
+  final int count;
   final Widget child;
 
   const StoxBadge({
@@ -170,19 +174,21 @@ class StoxBadge extends StatelessWidget {
         child,
         if (count > 0)
           Positioned(
-            right: 6,
-            top:   6,
+            right: 4,
+            top: 4,
             child: Container(
-              width:  18,
-              height: 18,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
               decoration: BoxDecoration(
-                  color: Colors.red.shade600, shape: BoxShape.circle),
+                color: Colors.red.shade600,
+                borderRadius: BorderRadius.circular(9),
+              ),
               child: Center(
                 child: Text(
-                  '$count',
+                  count > 99 ? '99+' : '$count',
                   style: const TextStyle(
-                      color:      Colors.white,
-                      fontSize:   11,
+                      color: Colors.white,
+                      fontSize: 10,
                       fontWeight: FontWeight.bold),
                 ),
               ),

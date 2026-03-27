@@ -9,6 +9,9 @@ import 'package:vibration/vibration.dart';
 /// automaticamente ao final da reprodução, garantindo que sons nunca
 /// sejam cortados — mesmo quando disparados em sequência rápida.
 ///
+/// Vibração e áudio operam em blocos independentes: uma falha na
+/// vibração não impede o som, e vice-versa.
+///
 /// Uso:
 /// ```dart
 /// await StoxAudio.play('sounds/check.mp3');
@@ -28,10 +31,10 @@ class StoxAudio {
     bool isError = false,
     bool isFail = false,
   }) async {
+    // ── Vibração (independente — falha aqui não impede o som) ──
     try {
-      // ── Vibração ──
       final temVibrador = await Vibration.hasVibrator();
-      if (temVibrador == true) {
+      if (temVibrador) {
         if (isFail) {
           Vibration.vibrate(pattern: [0, 400, 100, 400]);
         } else if (isError) {
@@ -44,13 +47,19 @@ class StoxAudio {
             ? HapticFeedback.vibrate()
             : HapticFeedback.lightImpact();
       }
+    } catch (e) {
+      if (kDebugMode) debugPrint('StoxAudio.play (vibração): $e');
+    }
 
-      // ── Som com player independente (nunca corta o anterior) ──
-      final player = AudioPlayer();
-      player.onPlayerComplete.listen((_) => player.dispose());
+    // ── Som com player independente (nunca corta o anterior) ──
+    AudioPlayer? player;
+    try {
+      player = AudioPlayer();
+      player.onPlayerComplete.listen((_) => player?.dispose());
       await player.play(AssetSource(asset));
     } catch (e) {
-      if (kDebugMode) debugPrint('StoxAudio.play: $e');
+      player?.dispose();
+      if (kDebugMode) debugPrint('StoxAudio.play (áudio): $e');
     }
   }
 }

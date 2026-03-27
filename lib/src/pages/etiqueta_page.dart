@@ -45,9 +45,9 @@ class _EtiquetaPageState extends State<EtiquetaPage>
   _ModoImpressao   _modo   = _ModoImpressao.rede;
   late TabController _tabController;
 
-  late TextEditingController _copiasController;
-  late TextEditingController _larguraController;
-  late TextEditingController _alturaController;
+  final _copiasController  = TextEditingController(text: '1');
+  final _larguraController = TextEditingController(text: '60');
+  final _alturaController  = TextEditingController(text: '40');
 
   bool get _isLote =>
       widget.itenslote != null && widget.itenslote!.isNotEmpty;
@@ -101,9 +101,9 @@ class _EtiquetaPageState extends State<EtiquetaPage>
     final config = await LabelConfig.carregar();
     if (!mounted) return;
     setState(() => _config = config);
-    _copiasController  = TextEditingController(text: config.copiasPorItem.toString());
-    _larguraController = TextEditingController(text: config.larguraMm.toString());
-    _alturaController  = TextEditingController(text: config.alturaMm.toString());
+    _copiasController.text  = config.copiasPorItem.toString();
+    _larguraController.text = config.larguraMm.toString();
+    _alturaController.text  = config.alturaMm.toString();
   }
 
   Future<void> _solicitarPermissoesBluetooth() async {
@@ -191,7 +191,7 @@ class _EtiquetaPageState extends State<EtiquetaPage>
     _tabController.animateTo(0);
   }
 
-  // ── Comandos TSPL (corrigidos) ────────────────────────────────────────────
+  // ── Comandos TSPL ──────────────────────────────────────────────────────────
 
   /// Envia um comando TSPL com quebra de linha CR+LF
   Future<void> _enviarComandoTSPL(String comando) async {
@@ -201,12 +201,12 @@ class _EtiquetaPageState extends State<EtiquetaPage>
     await Future.delayed(const Duration(milliseconds: 50));
   }
 
-  /// Inicializa a impressora com as dimensões e configurações básicas
+  /// Inicializa a impressora com as dimensões e configurações básicas.
+  ///
+  /// TSPL `SIZE` recebe milímetros (não dots).
+  /// Coordenadas X/Y nos comandos TEXT e BARCODE usam dots (1mm ≈ 8 dots a 203dpi).
   Future<void> _inicializarImpressora() async {
-    final larguraPontos = (_config.larguraMm * 8).toInt();
-    final alturaPontos  = (_config.alturaMm * 8).toInt();
-
-    await _enviarComandoTSPL('SIZE $larguraPontos, $alturaPontos');
+    await _enviarComandoTSPL('SIZE ${_config.larguraMm}, ${_config.alturaMm}');
     await _enviarComandoTSPL('GAP 0, 0');
     await _enviarComandoTSPL('DIRECTION 1');
     await _enviarComandoTSPL('REFERENCE 0,0');
@@ -214,58 +214,134 @@ class _EtiquetaPageState extends State<EtiquetaPage>
     await _enviarComandoTSPL('DENSITY 12');
   }
 
-  /// Imprime uma etiqueta (já com a impressora configurada)
+  /// Imprime uma etiqueta com layout otimizado.
+  ///
+  /// Layout:
+  /// ┌──────────────────────────────────┐
+  /// │ Nome do item (esquerda, até 2    │
+  /// │ linhas se extenso)               │
+  /// │                                  │  ← espaço extra
+  /// │     ||||| BARCODE |||||          │  ← centralizado
+  /// │                                  │
+  /// │ LM4029APCD - DEP: 01            │  ← código - depósito
+  /// └──────────────────────────────────┘
   Future<void> _imprimirEtiquetaTSPL(Map<String, dynamic> item) async {
     final codigo = item['ItemCode']?.toString() ?? '000';
     final nome   = item['ItemName']?.toString() ?? '';
     final dep    = item['_deposito']?.toString() ?? widget.deposito;
 
-    final alturaPontos = (_config.alturaMm * 8).toInt();
+    // Dimensões da etiqueta em dots (1mm ≈ 8 dots a 203dpi)
+    final larguraDots = (_config.larguraMm * 8).toInt();
+    final alturaDots  = (_config.alturaMm * 8).toInt();
+    final margemX     = 16; // ~2mm de margem lateral
+    final areaUtil    = larguraDots - (margemX * 2);
 
     // Limpa o buffer atual
     await _enviarComandoTSPL('CLS');
 
-    int yPos = 20;
+    // ── Constantes de layout ──
+    const alturaLinha   = 24;  // fonte "0" tamanho 1×1
+    const espacamento   = 6;
+    const charLargura   = 8;   // ~8 dots por caractere na fonte "0" 1×1
+    const espacoExtra   = 16;  // espaço extra entre nome e barcode
 
-    // Nome do item
+    // Quantos caracteres cabem por linha na área útil
+    final charsMaxLinha = areaUtil ~/ charLargura;
+
+    int yPos = 12; // margem superior
+
+    // ── 1. Nome do item (alinhado à esquerda, até 2 linhas + espaço extra) ──
     if (_config.mostrarNomeItem && nome.isNotEmpty) {
-      await _enviarComandoTSPL('TEXT 20,$yPos,"0",1,1,1,"${_escapeTSPL(nome)}"');
-      yPos += 30;
+      final nomeEscapado = _escapeTSPL(nome);
+
+      if (nomeEscapado.length <= charsMaxLinha) {
+        // Cabe em 1 linha
+        await _enviarComandoTSPL(
+            'TEXT $margemX,$yPos,"0",1,1,1,"$nomeEscapado"');
+        yPos += alturaLinha;
+      } else {
+        // Quebra em 2 linhas no último espaço que cabe
+        int corte = nomeEscapado.lastIndexOf(' ', charsMaxLinha);
+        if (corte <= 0) corte = charsMaxLinha;
+        final linha1 = nomeEscapado.substring(0, corte).trim();
+        final linha2 = nomeEscapado.substring(corte).trim();
+
+        await _enviarComandoTSPL(
+            'TEXT $margemX,$yPos,"0",1,1,1,"$linha1"');
+        yPos += alturaLinha;
+        if (linha2.isNotEmpty) {
+          final l2 = linha2.length > charsMaxLinha
+              ? '${linha2.substring(0, charsMaxLinha - 3)}...'
+              : linha2;
+          await _enviarComandoTSPL(
+              'TEXT $margemX,$yPos,"0",1,1,1,"$l2"');
+          yPos += alturaLinha;
+        }
+      }
+      // Espaço extra entre nome e barcode
+      yPos += espacoExtra;
     }
 
-    // Código de barras Code128
+    // ── 2. Código de barras Code128 (centralizado) ──
     if (_config.mostrarCodigoBarras && codigo.isNotEmpty) {
-      final alturaBarra = (alturaPontos - yPos - 60).clamp(40, 200);
+      final espacoBottom = (_config.mostrarCodigoTexto || _config.mostrarDeposito)
+          ? alturaLinha + espacamento + 12
+          : 12;
+      final alturaBarcode = (alturaDots - yPos - espacoBottom).clamp(25, 100);
+
+      final modulosBarcode = 35 + (codigo.length * 11);
+      final larguraBarcode = modulosBarcode * 2;
+      final barcodeX = ((larguraDots - larguraBarcode) ~/ 2).clamp(margemX, larguraDots ~/ 4);
+
       await _enviarComandoTSPL(
-          'BARCODE 20,$yPos,"128",$alturaBarra,1,0,2,2,"${_escapeTSPL(codigo)}"');
-      yPos += alturaBarra + 10;
+          'BARCODE $barcodeX,$yPos,"128",$alturaBarcode,0,0,2,2,"${_escapeTSPL(codigo)}"');
+      yPos += alturaBarcode + espacamento;
     }
 
-    // Linha de informações (código + depósito)
+    // ── 3. Código - DEP: XX (linha única) ──
     final infoLine = <String>[];
     if (_config.mostrarCodigoTexto) infoLine.add(codigo);
     if (_config.mostrarDeposito) infoLine.add('DEP: $dep');
-    final infoText = infoLine.join('  ');
+    final infoText = infoLine.join(' - ');
 
     if (infoText.isNotEmpty) {
-      final larguraPontos = (_config.larguraMm * 8).toInt();
-      final xPos = (larguraPontos - _calcularLarguraTexto(infoText, 1)) ~/ 2;
       await _enviarComandoTSPL(
-          'TEXT ${xPos > 0 ? xPos : 20},$yPos,"0",1,1,1,"${_escapeTSPL(infoText)}"');
+          'TEXT $margemX,$yPos,"0",1,1,1,"${_escapeTSPL(infoText)}"');
     }
 
     // Comando de impressão (1 cópia)
     await _enviarComandoTSPL('PRINT 1,1');
   }
 
+  /// Escapa e transliterea texto para compatibilidade com impressoras TSPL.
+  ///
+  /// Impressoras térmicas TSPL usam codepages de byte único e não
+  /// interpretam UTF-8 corretamente. Substituir acentos antes de
+  /// enviar garante compatibilidade com qualquer modelo.
   String _escapeTSPL(String text) {
-    return text.replaceAll('"', '\\"').replaceAll('\n', ' ');
+    final buffer = StringBuffer();
+    for (int i = 0; i < text.length; i++) {
+      buffer.write(_tsplCharMap[text[i]] ?? text[i]);
+    }
+    return buffer.toString().replaceAll('"', '\\"').replaceAll('\n', ' ');
   }
 
-  int _calcularLarguraTexto(String text, int fontSize) {
-    // Aproximação: cada caractere ocupa ~8 pontos no tamanho 1
-    return text.length * (fontSize * 8);
-  }
+  static const _tsplCharMap = {
+    'á': 'a', 'à': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a',
+    'Á': 'A', 'À': 'A', 'Â': 'A', 'Ã': 'A', 'Ä': 'A',
+    'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
+    'É': 'E', 'È': 'E', 'Ê': 'E', 'Ë': 'E',
+    'í': 'i', 'ì': 'i', 'î': 'i', 'ï': 'i',
+    'Í': 'I', 'Ì': 'I', 'Î': 'I', 'Ï': 'I',
+    'ó': 'o', 'ò': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o',
+    'Ó': 'O', 'Ò': 'O', 'Ô': 'O', 'Õ': 'O', 'Ö': 'O',
+    'ú': 'u', 'ù': 'u', 'û': 'u', 'ü': 'u',
+    'Ú': 'U', 'Ù': 'U', 'Û': 'U', 'Ü': 'U',
+    'ç': 'c', 'Ç': 'C',
+    'ñ': 'n', 'Ñ': 'N',
+    'ý': 'y', 'Ý': 'Y', 'ÿ': 'y',
+    'ª': 'a', 'º': 'o',
+  };
 
   // ── Geração de PDF ────────────────────────────────────────────────────────
 
@@ -284,46 +360,41 @@ class _EtiquetaPageState extends State<EtiquetaPage>
         marginAll: 2 * PdfPageFormat.mm,
       ),
       build: (ctx) => pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.center,
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
         mainAxisAlignment: pw.MainAxisAlignment.center,
         children: [
           if (_config.mostrarNomeItem && nome.isNotEmpty) ...[
             pw.Text(
               nome,
               style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
-              textAlign: pw.TextAlign.center,
+              textAlign: pw.TextAlign.left,
               maxLines: 2,
             ),
-            pw.SizedBox(height: 2),
+            pw.SizedBox(height: 6),
           ],
           if (_config.mostrarCodigoBarras)
             pw.Expanded(
-              child: pw.BarcodeWidget(
-                barcode: Barcode.code128(),
-                data:    codigo.isEmpty ? '000' : codigo,
-                drawText: false,
+              child: pw.Center(
+                child: pw.BarcodeWidget(
+                  barcode: Barcode.code128(),
+                  data:    codigo.isEmpty ? '000' : codigo,
+                  drawText: false,
+                ),
               ),
             ),
           pw.SizedBox(height: 2),
-          pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.center,
-            children: [
-              if (_config.mostrarCodigoTexto)
-                pw.Text(
-                  codigo,
-                  style: pw.TextStyle(
-                    fontSize: 7,
-                    fontWeight: pw.FontWeight.bold,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-              if (_config.mostrarCodigoTexto && _config.mostrarDeposito)
-                pw.Text('  •  ', style: const pw.TextStyle(fontSize: 6)),
-              if (_config.mostrarDeposito)
-                pw.Text('DEP: $dep',
-                    style: pw.TextStyle(fontSize: 6, fontWeight: pw.FontWeight.bold)),
-            ],
-          ),
+          if (_config.mostrarCodigoTexto || _config.mostrarDeposito)
+            pw.Text(
+              [
+                if (_config.mostrarCodigoTexto) codigo,
+                if (_config.mostrarDeposito) 'DEP: $dep',
+              ].join(' - '),
+              style: pw.TextStyle(
+                fontSize: 7,
+                fontWeight: pw.FontWeight.bold,
+                letterSpacing: 0.5,
+              ),
+            ),
         ],
       ),
     );
@@ -813,44 +884,40 @@ class _EtiquetaPageState extends State<EtiquetaPage>
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (_config.mostrarNomeItem && nome.isNotEmpty) ...[
                 Text(nome,
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 9 * fator),
-                    textAlign: TextAlign.center,
+                    textAlign: TextAlign.left,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis),
-                SizedBox(height: 2 * fator),
+                SizedBox(height: 6 * fator),
               ],
               if (_config.mostrarCodigoBarras)
                 Expanded(
-                  child: BarcodeWidget(
-                    barcode:  Barcode.code128(),
-                    data:     codigo.isEmpty ? '000' : codigo,
-                    width:    previewW - 12 * fator,
-                    drawText: false,
+                  child: Center(
+                    child: BarcodeWidget(
+                      barcode:  Barcode.code128(),
+                      data:     codigo.isEmpty ? '000' : codigo,
+                      width:    previewW * 0.75,
+                      drawText: false,
+                    ),
                   ),
                 ),
               SizedBox(height: 2 * fator),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (_config.mostrarCodigoTexto)
-                    Text(codigo,
-                        style: TextStyle(
-                            letterSpacing: 1,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 9 * fator)),
-                  if (_config.mostrarCodigoTexto && _config.mostrarDeposito)
-                    Text('  •  ', style: TextStyle(fontSize: 7 * fator, color: Colors.grey.shade400)),
-                  if (_config.mostrarDeposito)
-                    Text('DEP: $dep',
-                        style: TextStyle(
-                            fontSize: 8 * fator, fontWeight: FontWeight.bold)),
-                ],
-              ),
+              if (_config.mostrarCodigoTexto || _config.mostrarDeposito)
+                Text(
+                  [
+                    if (_config.mostrarCodigoTexto) codigo,
+                    if (_config.mostrarDeposito) 'DEP: $dep',
+                  ].join(' - '),
+                  style: TextStyle(
+                      letterSpacing: 0.5,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 8 * fator),
+                ),
             ],
           ),
         ),
