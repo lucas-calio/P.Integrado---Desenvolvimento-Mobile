@@ -9,7 +9,7 @@
 ## 📸 Screenshots
 
 <p align="center">
-  <img src="https://github.com/calebe-moraes/P.Integrado---Desenvolvimento-Mobile/raw/main/assets/screenshot/image1.png" width="160">
+  <img src="https://github.com/calebe-moraes/P.Integrado---Desenvolvimento-Mobile/raw/main/assets/screenshot/image1.png" width="720">
 </p>
 
 ---
