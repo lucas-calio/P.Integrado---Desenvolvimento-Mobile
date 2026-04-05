@@ -6,6 +6,22 @@
 
 ---
 
+## 📸 Screenshots
+
+<p align="center">
+  <img src="assets/screenshot/screenshot_01_login.jpeg" width="160">
+  <img src="assets/screenshot/screenshot_02_setup.jpeg" width="160">
+  <img src="assets/screenshot/screenshot_03_nav.jpeg" width="160">
+  <img src="assets/screenshot/screenshot_04_csv.jpeg" width="160">
+  <img src="assets/screenshot/screenshot_05_sincronizar.jpeg" width="160">
+  <img src="assets/screenshot/screenshot_06_buscar.jpeg" width="160">
+  <img src="assets/screenshot/screenshot_07_etiqueta_setup.jpeg" width="160">
+  <img src="assets/screenshot/screenshot_08_lqrcode.jpeg" width="160">
+  <img src="assets/screenshot/screenshot_09_leitura.jpeg" width="160">
+</p>
+
+---
+
 ##  Resumo Executivo
 
 O **STOX** é uma plataforma móvel desenvolvida em Flutter para modernizar e automatizar o processo de inventário físico do **Grupo JCN** (São João da Boa Vista/SP). A solução substitui coletores físicos e processos manuais por um aplicativo ágil, integrado diretamente ao **SAP Business One via Service Layer API**, operando em modo **offline-first** com banco de dados local SQLite.
@@ -213,6 +229,12 @@ Consultar Item → Adicionar à fila → Impressão de Etiqueta → Bluetooth �
 ```
 Exportar CSV (outro STOX/coletor) → Importar Contagem → Preview → Importa → Sincroniza
 ```
+
+---
+
+## 💡 Idealização do Projeto
+
+O STOX nasceu de uma necessidade real identificada por **Rafael Valentim**, Gerente de Tecnologia da Informação do **Grupo JCN** (São João da Boa Vista/SP), que concebeu a solução para modernizar o processo de inventário físico da empresa, substituindo coletores de alto custo e eliminando o retrabalho de digitação manual no SAP.
 
 ---
 
