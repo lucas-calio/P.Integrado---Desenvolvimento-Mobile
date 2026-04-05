@@ -6,7 +6,7 @@
 
 ---
 
-## 📸 Screenshots
+##  Screenshots
 
 <p align="center">
   <img src="https://github.com/calebe-moraes/P.Integrado---Desenvolvimento-Mobile/raw/main/assets/screenshot/image1.png" width="720">
@@ -224,7 +224,7 @@ Exportar CSV (outro STOX/coletor) → Importar Contagem → Preview → Importa 
 
 ---
 
-## 💡 Idealização do Projeto
+##  Idealização do Projeto
 
 O STOX nasceu de uma necessidade real identificada por **Rafael Valentim**, Gerente de Tecnologia da Informação do **Grupo JCN** (São João da Boa Vista/SP), que concebeu a solução para modernizar o processo de inventário físico da empresa, substituindo coletores de alto custo e eliminando o retrabalho de digitação manual no SAP.
 
