@@ -9,15 +9,7 @@
 ## 📸 Screenshots
 
 <p align="center">
-  <img src="assets/screenshot/screenshot_01_login.jpeg" width="160">
-  <img src="assets/screenshot/screenshot_02_setup.jpeg" width="160">
-  <img src="assets/screenshot/screenshot_03_nav.jpeg" width="160">
-  <img src="assets/screenshot/screenshot_04_csv.jpeg" width="160">
-  <img src="assets/screenshot/screenshot_05_sincronizar.jpeg" width="160">
-  <img src="assets/screenshot/screenshot_06_buscar.jpeg" width="160">
-  <img src="assets/screenshot/screenshot_07_etiqueta_setup.jpeg" width="160">
-  <img src="assets/screenshot/screenshot_08_lqrcode.jpeg" width="160">
-  <img src="assets/screenshot/screenshot_09_leitura.jpeg" width="160">
+  <img src="https://github.com/calebe-moraes/P.Integrado---Desenvolvimento-Mobile/raw/main/assets/screenshot/image1.png" width="160">
 </p>
 
 ---
