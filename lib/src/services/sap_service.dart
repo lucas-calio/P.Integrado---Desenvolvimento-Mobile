@@ -242,6 +242,12 @@ class SapService {
         (prefs.getString('B1SESSION') ?? '').isNotEmpty;
   }
 
+  /// Busca itens no SAP por código ou nome usando `contains`.
+  ///
+  /// Filtro OData: `contains(ItemCode,'termo') or contains(ItemName,'termo')`
+  /// Seleciona `ItemCode`, `ItemName` e `Frozen` (usado para filtro de status).
+  /// Usa `Prefer: odata.maxpagesize=0` para retornar todos os resultados
+  /// que casam com o filtro (sem paginação).
   static Future<List<dynamic>> searchItems(String termo) async {
     final ctx = await _obterContexto();
     if (ctx == null) return [];
@@ -252,12 +258,18 @@ class SapService {
       final t = termo.replaceAll("'", "''");
       final uri = Uri.parse(
         '${ctx.baseUrl}Items?'
-        '\$select=ItemCode,ItemName&'
+        '\$select=ItemCode,ItemName,Frozen&'
         "\$filter=contains(ItemCode,'$t') or contains(ItemName,'$t')",
       );
 
       final response = await client
-          .get(uri, headers: _headersGet(ctx))
+          .get(
+            uri,
+            headers: {
+              ..._headersGet(ctx),
+              'Prefer': 'odata.maxpagesize=0',
+            },
+          )
           .timeout(_timeoutLeitura);
 
       if (response.statusCode == 200) {
@@ -299,6 +311,9 @@ class SapService {
     return [];
   }
 
+  /// Busca detalhes completos de um item pelo código.
+  ///
+  /// Inclui campos extras: `User_Text`, `SupplierCatalogNo`, `CreateDate`.
   static Future<Map<String, dynamic>?> getDetailedItem(
     String itemCode,
   ) async {
@@ -321,6 +336,7 @@ class SapService {
           'QuantityOnStock,QuantityOrderedFromVendors,'
           'QuantityOrderedByCustomers,'
           'Mainsupplier,Manufacturer,'
+          'User_Text,SupplierCatalogNo,CreateDate,'
           'ItemWarehouseInfoCollection,ItemPreferredVendors,ItemPrices';
 
       final uri = Uri.parse(

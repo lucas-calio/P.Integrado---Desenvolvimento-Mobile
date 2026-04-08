@@ -16,12 +16,15 @@ enum _FiltroItem { todos, ativos, bloqueados }
 
 /// Tela de consulta de itens no SAP Business One.
 ///
-/// Permite busca por código ou nome, filtragem por status,
-/// exibe detalhes completos do item e gerencia uma fila de
-/// impressão de etiquetas.
+/// Busca por código ou nome do item usando `contains` no ItemCode e ItemName.
+/// A busca é disparada APENAS ao pressionar o botão de busca (ou Enter).
+/// Scanner, OCR e câmera disparam a busca automaticamente após captura.
+///
+/// Ao visualizar detalhes de um item, o botão Voltar retorna à lista de
+/// resultados (não sai da tela de busca).
 ///
 /// Funcionalidades:
-/// - Busca com debounce (600ms) e feedback sonoro
+/// - Busca explícita (botão / Enter) com feedback sonoro
 /// - Scanner de código de barras via [StoxScannerPage]
 /// - OCR de texto via [OcrService]
 /// - Filtros: Todos / Ativos / Bloqueados
@@ -37,17 +40,34 @@ class ItemSearchPage extends StatefulWidget {
 class _ItemSearchPageState extends State<ItemSearchPage> {
   final _searchController = TextEditingController();
 
-  Timer? _debounceTimer;
   Map<String, dynamic>? _itemData;
   List<dynamic> _resultados = [];
+  List<dynamic> _resultadosBackup = [];
   bool _carregando = false;
   _FiltroItem _filtro = _FiltroItem.todos;
 
+  /// `true` quando estamos exibindo detalhes de um item (não a lista).
+  bool get _exibindoDetalhes => _itemData != null;
+
   @override
   void dispose() {
-    _debounceTimer?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  // ── Navegação voltar ──────────────────────────────────────────────────────
+
+  /// Volta da tela de detalhes para a lista de resultados.
+  ///
+  /// Se havia mais de um resultado, restaura a lista.
+  /// Se havia apenas um resultado (detalhe direto), limpa tudo.
+  void _voltarParaResultados() {
+    HapticFeedback.selectionClick();
+    setState(() {
+      _itemData = null;
+      _resultados = _resultadosBackup;
+      _resultadosBackup = [];
+    });
   }
 
   // ── Carrinho de impressão ─────────────────────────────────────────────────
@@ -114,20 +134,23 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
 
   // ── Busca ─────────────────────────────────────────────────────────────────
 
-  Future<void> _buscar({bool autoSearch = false}) async {
+  /// Busca itens no SAP por código ou nome (contains em ambos os campos).
+  ///
+  /// Disparada apenas pelo botão de busca, Enter, scanner ou OCR.
+  /// Não há busca automática por digitação.
+  Future<void> _buscar() async {
     final termo = _searchController.text.trim();
     if (termo.isEmpty) {
-      if (!autoSearch) HapticFeedback.selectionClick();
+      HapticFeedback.selectionClick();
       return;
     }
-    if (!autoSearch) {
-      FocusScope.of(context).unfocus();
-      HapticFeedback.lightImpact();
-    }
+
+    FocusScope.of(context).unfocus();
+    HapticFeedback.lightImpact();
 
     final sessaoAtiva = await SapService.verificarSessao();
     if (!sessaoAtiva) {
-      if (!autoSearch && mounted) {
+      if (mounted) {
         await StoxAudio.play('sounds/error_beep.mp3', isError: true);
         if (!mounted) return;
         StoxSnackbar.erro(context,
@@ -140,6 +163,7 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
       _carregando = true;
       _itemData = null;
       _resultados = [];
+      _resultadosBackup = [];
     });
 
     try {
@@ -150,16 +174,18 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
         _carregando = false;
         if (results.length == 1) {
           FocusScope.of(context).unfocus();
+          // Guarda o resultado único no backup antes de ir pro detalhe
+          _resultadosBackup = results;
           _carregarDetalhes(results.first['ItemCode']);
         } else {
           _resultados = results;
-          if (results.isNotEmpty && !autoSearch) {
+          if (results.isNotEmpty) {
             HapticFeedback.selectionClick();
           }
         }
       });
 
-      if (results.isEmpty && !autoSearch) {
+      if (results.isEmpty) {
         await StoxAudio.play('sounds/error_beep.mp3', isError: true);
         if (!mounted) return;
         StoxSnackbar.aviso(context,
@@ -168,15 +194,18 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _carregando = false);
-      if (!autoSearch) {
-        await StoxAudio.play('sounds/fail.mp3', isFail: true);
-        if (!mounted) return;
-        StoxSnackbar.erro(context, 'Erro na busca: $e');
-      }
+      await StoxAudio.play('sounds/fail.mp3', isFail: true);
+      if (!mounted) return;
+      StoxSnackbar.erro(context, 'Erro na busca: $e');
     }
   }
 
   Future<void> _carregarDetalhes(String itemCode) async {
+    // Guarda resultados atuais antes de limpar (se não veio do resultado único)
+    if (_resultados.isNotEmpty) {
+      _resultadosBackup = List.from(_resultados);
+    }
+
     setState(() => _carregando = true);
     try {
       final data = await SapService.getDetailedItem(itemCode);
@@ -235,69 +264,83 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Consultar Item'),
-        actions: [
-          StoxBadge(
-            count: _carrinho.length,
-            child: IconButton(
-              icon: const Icon(Icons.print_rounded),
-              tooltip: 'Fila de impressão',
-              onPressed: _mostrarCarrinho,
+    return PopScope(
+      // Intercepta o botão Voltar do sistema / gesto de swipe
+      canPop: !_exibindoDetalhes,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _exibindoDetalhes) {
+          _voltarParaResultados();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Consultar Item'),
+          leading: _exibindoDetalhes
+              ? IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  tooltip: 'Voltar para resultados',
+                  onPressed: _voltarParaResultados,
+                )
+              : null, // null = botão padrão do Navigator (volta pra home)
+          actions: [
+            StoxBadge(
+              count: _carrinho.length,
+              child: IconButton(
+                icon: const Icon(Icons.print_rounded),
+                tooltip: 'Fila de impressão',
+                onPressed: _mostrarCarrinho,
+              ),
             ),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            if (_carregando) const StoxLinearLoading(),
+          ],
+        ),
+        body: SafeArea(
+          child: Column(
+            children: [
+              if (_carregando) const StoxLinearLoading(),
 
-            StoxSearchBar(
-              controller: _searchController,
-              onSearch: _buscar,
-              onIA: _escanearTextoIA,
-              onScanner: _abrirScanner,
-              onChanged: (value) {
-                if (_debounceTimer?.isActive ?? false) {
-                  _debounceTimer!.cancel();
-                }
-                _debounceTimer = Timer(
-                  const Duration(milliseconds: 600),
-                  () {
-                    if (value.trim().isNotEmpty) {
-                      _buscar(autoSearch: true);
-                    }
-                  },
-                );
-              },
-            ),
+              StoxSearchBar(
+                controller: _searchController,
+                onSearch: _buscar,
+                onIA: _escanearTextoIA,
+                onScanner: _abrirScanner,
+                // Sem onChanged — busca só pelo botão, Enter, scanner ou OCR
+              ),
 
-            if (!_carregando && _resultados.length > 1)
-              _buildFiltroChips(),
+              if (!_carregando && _resultados.length > 1)
+                _buildFiltroChips(),
 
-            if (!_carregando && _resultadosFiltrados.isNotEmpty)
-              _buildSugestoesBusca(),
+              if (!_carregando && _resultadosFiltrados.isNotEmpty)
+                _buildSugestoesBusca(),
 
-            if (!_carregando && _itemData != null) _buildDetalheItem(),
+              if (!_carregando && _itemData != null) _buildDetalheItem(),
 
-            if (!_carregando && _itemData == null && _resultados.isEmpty)
-              Expanded(
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.search_rounded,
-                          size: 64, color: Colors.grey.shade300),
-                      const SizedBox(height: 16),
-                      Text('Busque por código ou nome.',
-                          style: TextStyle(color: Colors.grey.shade500)),
-                    ],
+              if (!_carregando && _itemData == null && _resultados.isEmpty)
+                Expanded(
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.search_rounded,
+                            size: 64, color: Colors.grey.shade300),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Busque por código ou nome do item.',
+                          style: TextStyle(color: Colors.grey.shade500),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Digite e pressione buscar.',
+                          style: TextStyle(
+                            color: Colors.grey.shade400,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -447,6 +490,24 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
           ),
           const SizedBox(height: 12),
 
+          // ── Referência / Observação (User_Text) ──
+          if (_itemData!['User_Text'] != null &&
+              _itemData!['User_Text'].toString().isNotEmpty)
+            _buildInfoDestaque(
+              Icons.bookmark_outline_rounded,
+              'Referência',
+              _itemData!['User_Text'].toString(),
+            ),
+
+          // ── Catálogo do Fornecedor ──
+          if (_itemData!['SupplierCatalogNo'] != null &&
+              _itemData!['SupplierCatalogNo'].toString().isNotEmpty)
+            _buildInfoDestaque(
+              Icons.storefront_outlined,
+              'Catálogo Fornecedor',
+              _itemData!['SupplierCatalogNo'].toString(),
+            ),
+
           noCarrinho
               ? StoxDestructiveButton(
                   label: 'REMOVER DA FILA DE IMPRESSÃO',
@@ -490,11 +551,17 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
                   _itemData!['BarCode']?.toString()),
               StoxDetailRow(
                   'Código Adicional (SWW)', _itemData!['SWW']?.toString()),
+              StoxDetailRow('Catálogo Fornecedor',
+                  _itemData!['SupplierCatalogNo']?.toString()),
+              StoxDetailRow('Referência (User_Text)',
+                  _itemData!['User_Text']?.toString()),
               StoxDetailRow('Nome Estrangeiro',
                   _itemData!['ForeignName']?.toString()),
               StoxDetailRow('Grupo (código)',
                   _itemData!['ItemsGroupCode']?.toString()),
               StoxDetailRow('NCM', _itemData!['NCMCode']?.toString()),
+              StoxDetailRow('Data de Criação',
+                  _formatData(_itemData!['CreateDate'])),
             ],
           ),
 
@@ -515,9 +582,13 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
               StoxDetailRow('Qtd. Mínima de Pedido',
                   _formatNum(_itemData!['MinOrderQuantity'])),
               StoxDetailRow('Controle por Lote',
-                  _itemData!['ManageBatchNumbers'] == 'tYES' ? 'Sim' : 'Não'),
+                  _itemData!['ManageBatchNumbers'] == 'tYES'
+                      ? 'Sim'
+                      : 'Não'),
               StoxDetailRow('Controle por Nº de Série',
-                  _itemData!['ManageSerialNumbers'] == 'tYES' ? 'Sim' : 'Não'),
+                  _itemData!['ManageSerialNumbers'] == 'tYES'
+                      ? 'Sim'
+                      : 'Não'),
             ],
           ),
 
@@ -562,6 +633,59 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
           ),
 
           const SizedBox(height: 80),
+        ],
+      ),
+    );
+  }
+
+  // ── Card de informação em destaque ────────────────────────────────────────
+
+  Widget _buildInfoDestaque(IconData icone, String titulo, String valor) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.amber.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.amber.shade200),
+      ),
+      child: Row(
+        children: [
+          Icon(icone, size: 18, color: Colors.amber.shade800),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  titulo,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.amber.shade800,
+                  ),
+                ),
+                Text(
+                  valor,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey.shade800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: Icon(Icons.copy_rounded,
+                size: 16, color: Colors.grey.shade500),
+            tooltip: 'Copiar',
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: valor));
+              HapticFeedback.selectionClick();
+              StoxSnackbar.sucesso(context, '$titulo copiado.');
+            },
+          ),
         ],
       ),
     );
@@ -657,6 +781,20 @@ class _ItemSearchPageState extends State<ItemSearchPage> {
     final n = num.tryParse(val.toString());
     if (n == null || n == 0) return null;
     return '${n.toStringAsFixed(3)} $unidade';
+  }
+
+  String? _formatData(dynamic val) {
+    if (val == null) return null;
+    final str = val.toString();
+    if (str.isEmpty) return null;
+    try {
+      final dt = DateTime.parse(str);
+      return '${dt.day.toString().padLeft(2, '0')}/'
+          '${dt.month.toString().padLeft(2, '0')}/'
+          '${dt.year}';
+    } catch (_) {
+      return str;
+    }
   }
 }
 
