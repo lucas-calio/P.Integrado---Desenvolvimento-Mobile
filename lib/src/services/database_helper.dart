@@ -5,12 +5,16 @@ import 'package:sqflite/sqflite.dart';
 /// Singleton de acesso ao banco SQLite local do STOX.
 ///
 /// Gerencia o ciclo de vida do banco, migrations e operações CRUD
-/// da tabela `contagens`.
+/// das tabelas `contagens` e `envios`.
 ///
-/// Campos de controle:
+/// Campos de controle — tabela `contagens`:
 /// - `syncStatus`: 0 = Pendente, 1 = Sincronizado, 2 = Erro no envio.
 /// - `countingMode`: `'single'` = Contador simples, `'multiple'` = Contadores múltiplos.
 /// - `counterID`: `InternalKey` SAP do contador (`null` = modo simples).
+/// - `envioId`: referência ao registro de envio (`null` = ainda não enviado).
+///
+/// Campos de controle — tabela `envios`:
+/// - `status`: 0 = Pendente, 1 = Sucesso, 2 = Erro.
 ///
 /// Uso:
 /// ```dart
@@ -30,7 +34,7 @@ class DatabaseHelper {
   static const String _nomeArquivo = 'stox_offline.db';
 
   /// Versão atual do schema (incrementar ao adicionar migrations).
-  static const int _versao = 3;
+  static const int _versao = 4;
 
   DatabaseHelper._init();
 
@@ -68,11 +72,25 @@ class DatabaseHelper {
         warehouseCode TEXT    NOT NULL DEFAULT '01',
         countingMode  TEXT    NOT NULL DEFAULT 'single',
         counterID     INTEGER,
-        counterName   TEXT
+        counterName   TEXT,
+        envioId       INTEGER
       )
     ''');
 
-    // Índices para queries frequentes
+    await db.execute('''
+      CREATE TABLE envios (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        dataEnvio     TEXT    NOT NULL,
+        modo          TEXT    NOT NULL,
+        docEntry      INTEGER,
+        docNumber     INTEGER,
+        status        INTEGER NOT NULL DEFAULT 0,
+        mensagemErro  TEXT,
+        totalItens    INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+
+    // Índices — contagens
     await db.execute(
         'CREATE INDEX idx_itemCode     ON contagens (itemCode)');
     await db.execute(
@@ -81,6 +99,12 @@ class DatabaseHelper {
         'CREATE INDEX idx_counterID    ON contagens (counterID)');
     await db.execute(
         'CREATE INDEX idx_countingMode ON contagens (countingMode)');
+    await db.execute(
+        'CREATE INDEX idx_envioId      ON contagens (envioId)');
+
+    // Índices — envios
+    await db.execute(
+        'CREATE INDEX idx_envios_status ON envios (status)');
   }
 
   /// Aplica migrations incrementais para usuários que já tinham o banco.
@@ -115,7 +139,32 @@ class DatabaseHelper {
         'ON contagens (countingMode)',
       );
     }
-    // Para futuras versões: if (oldVersion < 4) { ... }
+    if (oldVersion < 4) {
+      // v3 → v4: rastreabilidade de envios (fix bug de duplicação)
+      await db.execute(
+        'ALTER TABLE contagens ADD COLUMN envioId INTEGER',
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_envioId ON contagens (envioId)',
+      );
+
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS envios (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          dataEnvio     TEXT    NOT NULL,
+          modo          TEXT    NOT NULL,
+          docEntry      INTEGER,
+          docNumber     INTEGER,
+          status        INTEGER NOT NULL DEFAULT 0,
+          mensagemErro  TEXT,
+          totalItens    INTEGER NOT NULL DEFAULT 0
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_envios_status ON envios (status)',
+      );
+    }
+    // Para futuras versões: if (oldVersion < 5) { ... }
   }
 
   // ── Inserção e atualização ────────────────────────────────────────────────
@@ -176,6 +225,30 @@ class DatabaseHelper {
       where: 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  /// Vincula um conjunto de contagens a um envio e atualiza o syncStatus.
+  ///
+  /// Usado após sincronização — marca cada contagem com o [envioId]
+  /// e o [status] (1 = Sucesso, 2 = Erro).
+  /// Usa batch para performance em listas grandes.
+  Future<void> vincularContagensAoEnvio(
+    List<int> ids,
+    int envioId,
+    int status,
+  ) async {
+    if (ids.isEmpty) return;
+    final db = await database;
+    final batch = db.batch();
+    for (final id in ids) {
+      batch.update(
+        'contagens',
+        {'envioId': envioId, 'syncStatus': status},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
+    await batch.commit(noResult: true);
   }
 
   // ── Exclusão ──────────────────────────────────────────────────────────────
@@ -271,6 +344,57 @@ class DatabaseHelper {
     );
     final total = result.first['total'];
     return total == null ? 0.0 : (total as num).toDouble();
+  }
+
+  // ── Envios (histórico de sincronizações) ──────────────────────────────────
+
+  /// Cria um registro de envio no início de uma sincronização.
+  ///
+  /// Retorna o `id` do envio criado.
+  Future<int> criarEnvio({
+    required String modo,
+    required int totalItens,
+    int? docEntry,
+    int? docNumber,
+  }) async {
+    final db = await database;
+    return db.insert('envios', {
+      'dataEnvio': DateTime.now().toIso8601String(),
+      'modo': modo,
+      'docEntry': docEntry,
+      'docNumber': docNumber,
+      'status': 0,
+      'totalItens': totalItens,
+    });
+  }
+
+  /// Atualiza o resultado de um envio após a resposta do SAP.
+  ///
+  /// [status]: 1 = Sucesso, 2 = Erro.
+  Future<void> finalizarEnvio(
+    int envioId, {
+    required int status,
+    String? mensagemErro,
+  }) async {
+    final db = await database;
+    await db.update(
+      'envios',
+      {'status': status, 'mensagemErro': mensagemErro},
+      where: 'id = ?',
+      whereArgs: [envioId],
+    );
+  }
+
+  /// Retorna os envios mais recentes. Limitado a [limite] registros.
+  Future<List<Map<String, dynamic>>> buscarEnvios({int limite = 50}) async {
+    final db = await database;
+    return db.query('envios', orderBy: 'dataEnvio DESC', limit: limite);
+  }
+
+  /// Remove todos os envios.
+  Future<void> limparEnvios() async {
+    final db = await database;
+    await db.delete('envios');
   }
 
   // ── Ciclo de vida ─────────────────────────────────────────────────────────
