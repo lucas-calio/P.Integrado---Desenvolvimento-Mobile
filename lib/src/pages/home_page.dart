@@ -17,18 +17,21 @@ import 'import_page.dart';
 import 'item_search_page.dart';
 import 'login_page.dart' show kStoxVersao, LoginPage;
 
+import '../services/gemini_service.dart'; // Para o Assistente Gemini
+import '../services/report_service.dart'; // Para o Relatório PDF
+import '../core/stox_orchestrator.dart'; // Para orquestrar a IA e ações do app
+import '../services/knowledge_service.dart'; // Para a base de conhecimento da IA
+
 /// Painel principal do STOX.
 ///
-/// Exibe as contagens offline pendentes, histórico de envios com
-/// status visuais, ações rápidas em grid, permite sincronizar com
-/// o SAP Business One e navega para as demais telas via Drawer.
+/// Exibe as contagens offline pendentes, ações rápidas em grid,
+/// permite sincronizar com o SAP Business One e navega para as
+/// demais telas via Drawer.
 ///
 /// Responsabilidades:
 /// - Monitorar conectividade de rede em tempo real
 /// - Listar contagens pendentes do SQLite
 /// - Sincronizar com SAP (POST para simples, PATCH para múltiplo)
-///   com rastreabilidade por grupo (evita duplicação)
-/// - Exibir histórico de envios com indicadores visuais
 /// - Interpretar erros SAP com mensagens amigáveis
 /// - Exportar relatório CSV
 /// - Navegação via Drawer (contagem simples, equipe, importação)
@@ -41,7 +44,8 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   List<Map<String, dynamic>> _contagens = [];
-  List<Map<String, dynamic>> _envios = [];
+  late StoxOrchestrator _orchestrator;
+  bool _aiReady = false;
   bool _iniciando = true;
   bool _carregando = false;
   String _nomeOperador = 'Operador...';
@@ -57,6 +61,16 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    final knowledgeService = KnowledgeService();
+
+  knowledgeService.init().then((_) {
+    final gemini = GeminiService(knowledgeService);
+    final db = DatabaseHelper.instance;
+    setState(() {
+      _orchestrator = StoxOrchestrator(gemini, db);
+      _aiReady = true;
+    });
+  });
     _carregarDadosIniciais();
     _iniciarMonitorConexao();
   }
@@ -97,11 +111,10 @@ class _HomePageState extends State<HomePage> {
 
   // ── Dados iniciais ────────────────────────────────────────────────────────
 
-  /// Carrega contagens, histórico, usuário e status SAP em paralelo.
+  /// Carrega contagens, usuário e status SAP em paralelo.
   Future<void> _carregarDadosIniciais() async {
     await Future.wait([
       _carregarContagens(),
-      _carregarHistorico(),
       _carregarUsuario(),
       _verificarConexaoSap(),
     ]);
@@ -124,13 +137,6 @@ class _HomePageState extends State<HomePage> {
       _contagens = dados;
       _iniciando = false;
     });
-  }
-
-  /// Busca o histórico recente de envios (últimos 20).
-  Future<void> _carregarHistorico() async {
-    final envios = await DatabaseHelper.instance.buscarEnvios(limite: 20);
-    if (!mounted) return;
-    setState(() => _envios = envios);
   }
 
   /// Verifica localmente se há sessão SAP ativa (sem request de rede).
@@ -256,23 +262,12 @@ class _HomePageState extends State<HomePage> {
 
   // ── Sincronização ─────────────────────────────────────────────────────────
 
-  /// Converte o código do modo de contagem para label legível.
-  static String _labelModo(String? modo) => switch (modo) {
-        'single' => 'Simples (Livre)',
-        'single_doc' => 'Simples (Documento)',
-        'multiple' => 'Equipe',
-        _ => 'Desconhecido',
-      };
-
   /// Sincroniza as contagens pendentes com o SAP Business One.
   ///
-  /// Cada grupo (single / single_doc / multiple) é sincronizado de forma
-  /// **independente** — o sucesso de um grupo não depende dos outros.
-  /// Para cada grupo, cria um registro de `envio` no SQLite com o resultado
-  /// e vincula as contagens ao envio correspondente.
-  ///
-  /// Isso evita o bug de duplicação onde um POST bem-sucedido era
-  /// reenviado porque um PATCH subsequente falhava e impedia a limpeza.
+  /// Fluxo por modo de contagem:
+  /// 1. `single` (offline livre) → POST novo documento
+  /// 2. `single_doc` (documento simples selecionado) → PATCH sem CounterID
+  /// 3. `multiple` (documento múltiplo selecionado) → PATCH com CounterID
   Future<void> _sincronizarComSAP() async {
     if (_contagens.isEmpty) return;
     if (_semInternet) {
@@ -283,8 +278,6 @@ class _HomePageState extends State<HomePage> {
     setState(() => _carregando = true);
 
     try {
-      final db = DatabaseHelper.instance;
-
       // Separa contagens por modo
       final livres = _contagens
           .where((c) => c['countingMode'] == 'single')
@@ -296,141 +289,66 @@ class _HomePageState extends State<HomePage> {
           .where((c) => c['countingMode'] == 'multiple')
           .toList();
 
-      int sucessos = 0;
-      int falhas = 0;
-      String? ultimoErro;
+      String? erroFinal;
 
-      // ── 1. Contagem livre (POST cria novo documento) ──
+      // 1. Contagem livre (POST cria novo documento)
       if (livres.isNotEmpty) {
-        final envioId = await db.criarEnvio(
-          modo: 'single',
-          totalItens: livres.length,
-        );
-        final ids = livres.map((c) => c['id'] as int).toList();
         final erro = await SapService.postInventoryCounting(livres);
-
-        if (erro == null) {
-          await db.finalizarEnvio(envioId, status: 1);
-          await db.vincularContagensAoEnvio(ids, envioId, 1);
-          sucessos++;
-        } else {
-          await db.finalizarEnvio(envioId, status: 2, mensagemErro: erro);
-          await db.vincularContagensAoEnvio(ids, envioId, 2);
-          ultimoErro = erro;
-          falhas++;
-        }
+        if (erro != null) erroFinal = erro;
       }
 
-      // ── 2. Contagem simples com documento (PATCH sem CounterID) ──
+      // 2. Contagem simples com documento (PATCH sem CounterID)
       if (simplesDoc.isNotEmpty) {
         final prefs = await SharedPreferences.getInstance();
         final docEntry = prefs.getInt('selected_doc_entry');
-        final docNumber = prefs.getInt('selected_doc_number');
-
-        final envioId = await db.criarEnvio(
-          modo: 'single_doc',
-          totalItens: simplesDoc.length,
-          docEntry: docEntry,
-          docNumber: docNumber,
-        );
-        final ids = simplesDoc.map((c) => c['id'] as int).toList();
 
         if (docEntry == null) {
-          const erro = 'Documento não identificado. '
+          erroFinal ??=
+              'Documento não identificado. '
               'Selecione um documento de contagem simples no menu.';
-          await db.finalizarEnvio(envioId, status: 2, mensagemErro: erro);
-          await db.vincularContagensAoEnvio(ids, envioId, 2);
-          ultimoErro = erro;
-          falhas++;
         } else {
           final erro = await SapService.patchSingleCounting(
             documentEntry: docEntry,
             contagens: simplesDoc,
           );
-          if (erro == null) {
-            await db.finalizarEnvio(envioId, status: 1);
-            await db.vincularContagensAoEnvio(ids, envioId, 1);
-            sucessos++;
-          } else {
-            await db.finalizarEnvio(envioId, status: 2, mensagemErro: erro);
-            await db.vincularContagensAoEnvio(ids, envioId, 2);
-            ultimoErro = erro;
-            falhas++;
-          }
+          if (erro != null) erroFinal = erro;
         }
       }
 
-      // ── 3. Contagem múltipla (PATCH com CounterID) ──
+      // 3. Contagem múltipla (PATCH com CounterID)
       if (multiplos.isNotEmpty) {
         final prefs = await SharedPreferences.getInstance();
         final docEntry = prefs.getInt('selected_doc_entry');
-        final docNumber = prefs.getInt('selected_doc_number');
         final counterID = await SapService.getCounterID();
 
-        final envioId = await db.criarEnvio(
-          modo: 'multiple',
-          totalItens: multiplos.length,
-          docEntry: docEntry,
-          docNumber: docNumber,
-        );
-        final ids = multiplos.map((c) => c['id'] as int).toList();
-
         if (docEntry == null) {
-          const erro = 'Documento não identificado. '
+          erroFinal ??=
+              'Documento não identificado. '
               'Selecione um documento de contagem em equipe no menu.';
-          await db.finalizarEnvio(envioId, status: 2, mensagemErro: erro);
-          await db.vincularContagensAoEnvio(ids, envioId, 2);
-          ultimoErro = erro;
-          falhas++;
         } else if (counterID == null) {
-          const erro = 'Seu contador (InternalKey) não foi identificado. '
+          erroFinal ??=
+              'Seu contador (InternalKey) não foi identificado. '
               'Faça logout e login novamente para resolver.';
-          await db.finalizarEnvio(envioId, status: 2, mensagemErro: erro);
-          await db.vincularContagensAoEnvio(ids, envioId, 2);
-          ultimoErro = erro;
-          falhas++;
         } else {
           final erro = await SapService.patchInventoryCounting(
             documentEntry: docEntry,
             contagens: multiplos,
             counterID: counterID,
           );
-          if (erro == null) {
-            await db.finalizarEnvio(envioId, status: 1);
-            await db.vincularContagensAoEnvio(ids, envioId, 1);
-            sucessos++;
-          } else {
-            await db.finalizarEnvio(envioId, status: 2, mensagemErro: erro);
-            await db.vincularContagensAoEnvio(ids, envioId, 2);
-            ultimoErro = erro;
-            falhas++;
-          }
+          if (erro != null) erroFinal = erro;
         }
       }
-
-      // ── 4. Limpar contagens sincronizadas e recarregar ──
-      await db.limparContagensSincronizadas();
-      await _carregarContagens();
-      await _carregarHistorico();
-      if (!mounted) return;
-
-      if (falhas == 0) {
+      // 4. Feedback ao operador
+      if (erroFinal == null) {
         await StoxAudio.play('sounds/check.mp3');
+        await DatabaseHelper.instance.limparContagens();
+        await _carregarContagens();
         if (!mounted) return;
         StoxSnackbar.sucesso(context, 'Sincronização concluída com sucesso!');
-      } else if (sucessos > 0) {
-        // Parcial: alguns grupos ok, outros falharam
-        await StoxAudio.play('sounds/error_beep.mp3', isError: true);
-        if (!mounted) return;
-        StoxSnackbar.aviso(
-          context,
-          '$sucessos grupo(s) sincronizado(s), $falhas com erro.',
-        );
-        _exibirErroSap(ultimoErro!);
       } else {
         await StoxAudio.play('sounds/fail.mp3', isFail: true);
         if (!mounted) return;
-        _exibirErroSap(ultimoErro!);
+        _exibirErroSap(erroFinal);
       }
     } catch (e) {
       await StoxAudio.play('sounds/fail.mp3', isFail: true);
@@ -752,73 +670,100 @@ class _HomePageState extends State<HomePage> {
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'Painel STOX',
-          style: TextStyle(fontWeight: FontWeight.bold),
+Widget build(BuildContext context) {
+  return Scaffold(
+    appBar: AppBar(
+      title: const Text(
+        'Painel STOX',
+        style: TextStyle(fontWeight: FontWeight.bold),
+      ),
+      elevation: 0,
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.assessment_outlined),
+          tooltip: 'Relatório de Estoque',
+          onPressed: () {
+            HapticFeedback.mediumImpact();
+            ReportService().generateStockReport();
+          },
         ),
-        elevation: 0,
-        actions: [
-          // ── Indicador SAP na barra de título ──
-          Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: _buildAppBarStatusChip(),
+
+        Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: _buildAppBarStatusChip(),
+        ),
+
+        IconButton(
+          icon: const Icon(Icons.refresh_rounded),
+          tooltip: 'Recarregar',
+          onPressed: () {
+            HapticFeedback.lightImpact();
+            _carregarDadosIniciais();
+          },
+        ),
+      ],
+    ),
+
+    drawer: _buildDrawer(),
+
+    /// 🔥 BOTÃO IA CORRIGIDO
+    floatingActionButton: FloatingActionButton(
+      backgroundColor: Colors.blueAccent,
+      child: const Icon(Icons.auto_awesome, color: Colors.white),
+      onPressed: () {
+        HapticFeedback.mediumImpact();
+
+        if (!_aiReady) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("IA ainda está carregando..."),
+            ),
+          );
+          return;
+        }
+
+        _showGeminiChat(context, _orchestrator);
+      },
+    ),
+
+    body: SafeArea(
+      child: Column(
+        children: [
+          if (_semInternet) _buildOfflineBanner(),
+
+          if (_carregando) const StoxLinearLoading(),
+
+          StoxSummaryCard(
+            totalItens: _contagens.length,
+            carregando: _carregando,
+            onSincronizar: _sincronizarComSAP,
           ),
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded),
-            tooltip: 'Recarregar',
-            onPressed: () {
-              HapticFeedback.lightImpact();
-              _carregarDadosIniciais();
-            },
-          ),
+
+          if (_iniciando)
+            const StoxSkeletonList(quantidade: 5)
+          else
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 20, 16, 80),
+                children: [
+                  _buildQuickActions(),
+                  const SizedBox(height: 24),
+
+                  if (_contagens.isEmpty)
+                    _buildEmptyState()
+                  else ...[
+                    _buildContagensHeader(),
+                    const SizedBox(height: 12),
+                    ..._contagens.map(_buildItemContagem),
+                  ],
+                ],
+              ),
+            ),
         ],
       ),
-      drawer: _buildDrawer(),
-      body: SafeArea(
-        child: Column(
-          children: [
-            if (_semInternet) _buildOfflineBanner(),
-            if (_carregando) const StoxLinearLoading(),
-            StoxSummaryCard(
-              totalItens: _contagens.length,
-              carregando: _carregando,
-              onSincronizar: _sincronizarComSAP,
-            ),
-            if (_iniciando)
-              const StoxSkeletonList(quantidade: 5)
-            else
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 20, 16, 80),
-                  children: [
-                    _buildQuickActions(),
-                    const SizedBox(height: 24),
-                    if (_contagens.isEmpty && _envios.isEmpty)
-                      _buildEmptyState()
-                    else ...[
-                      if (_contagens.isNotEmpty) ...[
-                        _buildContagensHeader(),
-                        const SizedBox(height: 12),
-                        ..._contagens.map(_buildItemContagem),
-                      ],
-                      if (_envios.isNotEmpty) ...[
-                        const SizedBox(height: 28),
-                        _buildHistoricoHeader(),
-                        const SizedBox(height: 12),
-                        ..._envios.map(_buildItemEnvio),
-                      ],
-                    ],
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
+    ),
+  );
+}
 
   // ── Banner offline ────────────────────────────────────────────────────────
 
@@ -874,9 +819,11 @@ class _HomePageState extends State<HomePage> {
                 cor: theme.primaryColor,
                 onTap: () {
                   if (!_sapConectado || _semInternet) {
+                    // Sem sessão SAP → vai direto pro modo offline livre
                     _abrirContagemSimplesDireta();
                     return;
                   }
+                  // Com sessão SAP → mostra documentos simples abertos
                   _mostrarDocumentosSimples();
                 },
               ),
@@ -1158,175 +1105,6 @@ class _HomePageState extends State<HomePage> {
       ),
     ),
   );
-
-  // ── Histórico de envios ───────────────────────────────────────────────────
-
-  Widget _buildHistoricoHeader() => Row(
-    children: [
-      Icon(Icons.send_rounded, color: Colors.grey.shade500, size: 20),
-      const SizedBox(width: 8),
-      Text(
-        'Histórico de Envios',
-        style: TextStyle(
-          fontWeight: FontWeight.bold,
-          fontSize: 15,
-          color: Colors.grey.shade800,
-        ),
-      ),
-      const Spacer(),
-      Text(
-        '${_envios.length} envio${_envios.length != 1 ? 's' : ''}',
-        style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
-      ),
-    ],
-  );
-
-  Widget _buildItemEnvio(Map<String, dynamic> envio) {
-    final status = envio['status'] as int? ?? 0;
-    final modo = envio['modo'] as String? ?? 'single';
-    final totalItens = envio['totalItens'] as int? ?? 0;
-    final docEntry = envio['docEntry'] as int?;
-    final mensagemErro = envio['mensagemErro'] as String?;
-    final dataEnvio = envio['dataEnvio'] as String? ?? '';
-
-    // ── Indicador visual por status ──
-    final Color corStatus;
-    final IconData iconeStatus;
-    final String labelStatus;
-
-    switch (status) {
-      case 1:
-        corStatus = Colors.green.shade600;
-        iconeStatus = Icons.check_circle_rounded;
-        labelStatus = 'Sucesso';
-      case 2:
-        corStatus = Colors.red.shade600;
-        iconeStatus = Icons.error_rounded;
-        labelStatus = 'Erro';
-      default:
-        corStatus = Colors.orange.shade600;
-        iconeStatus = Icons.schedule_rounded;
-        labelStatus = 'Pendente';
-    }
-
-    // ── Data formatada ──
-    String dataFormatada = '';
-    try {
-      final dt = DateTime.parse(dataEnvio);
-      dataFormatada =
-          '${dt.day.toString().padLeft(2, '0')}/'
-          '${dt.month.toString().padLeft(2, '0')} '
-          '${dt.hour.toString().padLeft(2, '0')}:'
-          '${dt.minute.toString().padLeft(2, '0')}';
-    } catch (_) {
-      dataFormatada = dataEnvio;
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: StoxCard(
-        borderColor: corStatus.withAlpha(60),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: status == 2 && mensagemErro != null
-              ? () => _exibirErroSap(mensagemErro)
-              : null,
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
-              children: [
-                // ── Indicador de status ──
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: corStatus.withAlpha(20),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(iconeStatus, color: corStatus, size: 22),
-                ),
-                const SizedBox(width: 14),
-
-                // ── Detalhes ──
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            _labelModo(modo),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                          ),
-                          if (docEntry != null) ...[
-                            const SizedBox(width: 6),
-                            Text(
-                              '#$docEntry',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey.shade500,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '$totalItens ${totalItens == 1 ? 'item' : 'itens'}'
-                        '  •  $dataFormatada',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                      if (status == 2 && mensagemErro != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          mensagemErro.length > 80
-                              ? '${mensagemErro.substring(0, 80)}...'
-                              : mensagemErro,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.red.shade600,
-                            fontStyle: FontStyle.italic,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-
-                // ── Badge de status ──
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: corStatus.withAlpha(20),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    labelStatus,
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: corStatus,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 
   // ── Bottom sheet de documentos ─────────────────────────────────────────────
 
@@ -1837,3 +1615,202 @@ class _ErroSap {
     this.codigoTecnico,
   });
 }
+
+void _showGeminiChat(BuildContext context, StoxOrchestrator orchestrator) {
+  final TextEditingController _controller = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+
+  List<Map<String, String>> messages = [];
+
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setState) {
+        Future<void> scrollToBottom() async {
+          await Future.delayed(const Duration(milliseconds: 100));
+          if (_scrollController.hasClients) {
+            _scrollController.animateTo(
+              _scrollController.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOut,
+            );
+          }
+        }
+
+        Future<void> sendMessage() async {
+          if (_controller.text.trim().isEmpty) return;
+
+          final userText = _controller.text.trim();
+
+          setState(() {
+            messages.add({'role': 'user', 'text': userText});
+            _controller.clear();
+
+            // loading
+            messages.add({'role': 'model', 'text': 'Digitando...'});
+          });
+
+          await scrollToBottom();
+
+          try {
+            final response = await orchestrator.handle(userText);
+
+            setState(() {
+              // remove "Digitando..."
+              messages.removeLast();
+
+              messages.add({
+                'role': 'model',
+                'text': response.toString(),
+              });
+            });
+          } catch (e) {
+            setState(() {
+              messages.removeLast();
+
+              messages.add({
+                'role': 'model',
+                'text': 'Erro ao processar: $e',
+              });
+            });
+          }
+
+          await scrollToBottom();
+        }
+
+        return DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          builder: (_, sheetController) => Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Column(
+              children: [
+                /// 🔹 Barra de arrasto
+                Container(
+                  margin: const EdgeInsets.all(12),
+                  height: 4,
+                  width: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+
+                /// 🔹 Header
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      Icon(Icons.auto_awesome, color: Colors.blue[800]),
+                      const SizedBox(width: 8),
+                      const Text(
+                        "STOX AI Assistant",
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const Divider(),
+
+                /// Lista de mensagens
+                Expanded(
+                  child: messages.isEmpty
+                      ? Center(
+                          child: Text(
+                            "Como posso ajudar no seu inventário hoje?",
+                            style: TextStyle(color: Colors.grey[600]),
+                          ),
+                        )
+                      : ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.all(16),
+                          itemCount: messages.length,
+                          itemBuilder: (context, index) {
+                            final isUser =
+                                messages[index]['role'] == 'user';
+
+                            return Align(
+                              alignment: isUser
+                                  ? Alignment.centerRight
+                                  : Alignment.centerLeft,
+                              child: Container(
+                                margin:
+                                    const EdgeInsets.symmetric(vertical: 4),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: isUser
+                                      ? Colors.blue[700]
+                                      : Colors.grey[200],
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  messages[index]['text'] ?? '',
+                                  style: TextStyle(
+                                    color: isUser
+                                        ? Colors.white
+                                        : Colors.black87,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+
+                /// Input
+                Padding(
+                  padding: EdgeInsets.only(
+                    bottom:
+                        MediaQuery.of(context).viewInsets.bottom + 16,
+                    left: 16,
+                    right: 16,
+                    top: 8,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _controller,
+                          onSubmitted: (_) => sendMessage(),
+                          decoration: InputDecoration(
+                            hintText: "Digite sua dúvida...",
+                            filled: true,
+                            fillColor: Colors.grey[100],
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(25),
+                              borderSide: BorderSide.none,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      CircleAvatar(
+                        backgroundColor: Colors.blue[800],
+                        child: IconButton(
+                          icon: const Icon(Icons.send,
+                              color: Colors.white),
+                          onPressed: sendMessage,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
